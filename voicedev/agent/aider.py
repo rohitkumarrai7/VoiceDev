@@ -49,6 +49,12 @@ class AiderBackend(AgentBackend):
             if path:
                 return path
 
+        uv_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")
+        for name in ["aider", "aider.exe", "aider.bat"]:
+            candidate = os.path.join(uv_bin, name)
+            if os.path.exists(candidate):
+                return candidate
+
         scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
         for name in ["aider.exe", "aider.bat", "aider.cmd"]:
             candidate = os.path.join(scripts_dir, name)
