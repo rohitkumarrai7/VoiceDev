@@ -14,6 +14,10 @@ class CommandRouter:
         "undo that": "/undo",
         "show diff": "/diff",
         "exit": "shutdown",
+        "yes": "Y",
+        "no": "N",
+        "accept": "Y",
+        "reject": "N",
     }
 
     def __init__(self, match_threshold: int = 75):

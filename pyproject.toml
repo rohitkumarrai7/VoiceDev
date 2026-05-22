@@ -35,6 +35,7 @@ dependencies = [
     "rapidfuzz>=3.0",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "pexpect>=4.9",
 ]
 
 [project.optional-dependencies]

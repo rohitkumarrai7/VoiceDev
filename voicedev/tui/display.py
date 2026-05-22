@@ -33,6 +33,7 @@ class TUIDisplay:
         self._total_audio_s = 0.0
         self._estimated_cost = 0.0
         self._stt_backend = "auto"
+        self._stt_cost_per_min = 0.0
         self._log_entries = []
 
     @property
@@ -48,6 +49,9 @@ class TUIDisplay:
     def set_stt_backend(self, name: str) -> None:
         self._stt_backend = name
 
+    def set_stt_cost_per_min(self, cost: float) -> None:
+        self._stt_cost_per_min = cost
+
     def record_transcription(
         self,
         text: str,
@@ -58,7 +62,7 @@ class TUIDisplay:
         self._last_text = text
         self._query_count += 1
         self._total_audio_s += audio_duration
-        self._estimated_cost += (audio_duration / 60.0) * 0.006
+        self._estimated_cost += (audio_duration / 60.0) * self._stt_cost_per_min
 
         kind = "CMD" if is_command else "Q"
         self._log_entries.append(f"[{kind}] {text}")

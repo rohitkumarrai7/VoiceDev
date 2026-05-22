@@ -92,3 +92,23 @@ class TestCommandRouter:
         self.router.remove_command("commit changes")
         result = self.router.route("commit changes")
         assert result is None or result[1] != "/commit"
+
+    def test_yes_command(self):
+        result = self.router.route("yes")
+        assert result is not None
+        assert result[1] == "Y"
+
+    def test_no_command(self):
+        result = self.router.route("no")
+        assert result is not None
+        assert result[1] == "N"
+
+    def test_accept_command(self):
+        result = self.router.route("accept")
+        assert result is not None
+        assert result[1] == "Y"
+
+    def test_reject_command(self):
+        result = self.router.route("reject")
+        assert result is not None
+        assert result[1] == "N"

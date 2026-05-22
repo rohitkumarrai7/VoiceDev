@@ -15,6 +15,7 @@ class SessionLogger:
         self._query_count = 0
         self._total_audio_duration = 0.0
         self._stt_backend = "unknown"
+        self._cost_per_min = 0.0
 
     @property
     def filepath(self) -> Path:
@@ -26,6 +27,8 @@ class SessionLogger:
 
     def set_stt_backend(self, name: str) -> None:
         self._stt_backend = name
+        cost_map = {"groq_whisper": 0.0, "whisper_api": 0.006, "faster_whisper": 0.0}
+        self._cost_per_min = cost_map.get(name, 0.0)
 
     def log_entry(
         self,
@@ -49,8 +52,7 @@ class SessionLogger:
 
     def _flush(self) -> None:
         duration = time.time() - self._start_time
-        cost_per_minute = 0.006
-        estimated_cost = (self._total_audio_duration / 60.0) * cost_per_minute
+        estimated_cost = (self._total_audio_duration / 60.0) * self._cost_per_min
 
         lines = [
             f"# VoiceDev Session Log",

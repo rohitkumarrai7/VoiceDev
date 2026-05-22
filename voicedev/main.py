@@ -26,6 +26,34 @@ from voicedev.commands.router import CommandRouter
 from voicedev.tui.display import TUIDisplay
 from voicedev.session.logger import SessionLogger
 
+STT_COST_PER_MIN = {
+    "groq_whisper": 0.0,
+    "whisper_api": 0.006,
+    "faster_whisper": 0.0,
+}
+
+
+class WakeWordDetector:
+    def __init__(self, phrase: str = "hey dev"):
+        self.phrase = phrase.lower()
+        self._armed = False
+
+    def process(self, text: str) -> bool:
+        if self._armed:
+            return True
+        text_lower = text.lower().strip()
+        if self.phrase in text_lower or text_lower in self.phrase:
+            self._armed = True
+            return True
+        return False
+
+    def disarm(self) -> None:
+        self._armed = False
+
+    @property
+    def armed(self) -> bool:
+        return self._armed
+
 
 class VoiceDev:
     def __init__(self, config: VoiceDevConfig):
@@ -42,6 +70,7 @@ class VoiceDev:
         self._stt: Optional[STTBackend] = None
         self._agent: Optional[AgentBackend] = None
         self._logger: Optional[SessionLogger] = None
+        self._wake = WakeWordDetector(phrase=config.wake_word)
 
     def _init_stt(self) -> STTBackend:
         if self.config.stt_backend == "groq_whisper":
@@ -86,6 +115,9 @@ class VoiceDev:
         self._stt = self._init_stt()
         self._tui.set_stt_backend(self._stt.name())
 
+        stt_cost = STT_COST_PER_MIN.get(self._stt.name(), 0.0)
+        self._tui.set_stt_cost_per_min(stt_cost)
+
         self._agent = self._init_agent()
         self._agent.start()
 
@@ -123,7 +155,6 @@ class VoiceDev:
         self._tui.console.print("[bold cyan]VoiceDev stopped. Session log saved.[/bold cyan]")
 
     def _process_audio(self, audio: np.ndarray) -> None:
-        audio_duration = len(audio) / AudioCapture.SAMPLE_RATE if hasattr(AudioCapture, 'SAMPLE_RATE') else len(audio) / 16000
         from voicedev.audio.capture import SAMPLE_RATE
         audio_duration = len(audio) / SAMPLE_RATE
 
@@ -136,7 +167,6 @@ class VoiceDev:
         try:
             text = self._stt.transcribe(audio)
         except Exception as e:
-            latency_ms = (time.time() - start_time) * 1000
             self._tui.console.print(f"[bold red]STT Error: {e}[/bold red]")
             self._tui.set_state(TUIDisplay.STATE_IDLE)
             self._tui.print_status()
@@ -149,6 +179,34 @@ class VoiceDev:
             return
 
         text = text.strip()
+
+        if self._mode == "Continuous":
+            if not self._wake.process(text):
+                self._tui.console.print(f"[dim]Wake word required. Heard: '{text}'[/dim]")
+                self._tui.set_state(TUIDisplay.STATE_IDLE)
+                self._tui.print_status()
+                return
+            text = text.lower().replace(self._wake.phrase, "").strip()
+            if not text:
+                self._tui.console.print("[green]Wake word detected. Listening...[/green]")
+                self._tui.set_state(TUIDisplay.STATE_LISTENING)
+                self._tui.print_status()
+                return
+
+        pending = None
+        if hasattr(self._agent, "has_pending_prompt"):
+            pending = self._agent.has_pending_prompt()
+
+        if pending:
+            self._tui.console.print(f"[yellow]Aider asks: {pending}[/yellow]")
+            self._tui.console.print(f"[green]Voice responding: {text}[/green]")
+            self._tui.record_transcription(text, True, audio_duration, latency_ms)
+            if self._logger:
+                self._logger.log_entry(f"[prompt response] {text}", True, latency_ms, audio_duration)
+            self._agent.respond_to_prompt(text)
+            self._tui.set_state(TUIDisplay.STATE_IDLE)
+            self._tui.print_status()
+            return
 
         command_result = self._router.route(text)
         is_command = command_result is not None
@@ -167,6 +225,9 @@ class VoiceDev:
         else:
             self._agent.send_query(text)
 
+        if self._mode == "Continuous":
+            self._wake.disarm()
+
         time.sleep(0.3)
         self._tui.set_state(TUIDisplay.STATE_IDLE)
         self._tui.print_status()
@@ -174,20 +235,24 @@ class VoiceDev:
     def _handle_command(self, action: str) -> None:
         if action == "pause":
             self._paused = True
-            self._tui.console.print("[yellow]⏸ Paused. Say 'start listening' to resume.[/yellow]")
+            self._tui.console.print("[yellow]Paused. Say 'start listening' to resume.[/yellow]")
         elif action == "resume":
             self._paused = False
-            self._tui.console.print("[green]▶ Resumed.[/green]")
+            self._tui.console.print("[green]Resumed.[/green]")
         elif action == "mode_continuous":
             self._mode = "Continuous"
             self._tui.set_mode("Continuous")
             self._tui.console.print("[green]Switched to Continuous (hands-free) mode.[/green]")
+            self._tui.console.print(f"[dim]Say your wake word ('{self.config.wake_word}') before each command.[/dim]")
         elif action == "mode_manual":
             self._mode = "PTT"
             self._tui.set_mode("PTT")
             self._tui.console.print("[green]Switched to PTT (push-to-talk) mode.[/green]")
         elif action == "shutdown":
             self._running = False
+        elif action in ("Y", "y", "N", "n"):
+            if hasattr(self._agent, "respond_to_prompt"):
+                self._agent.respond_to_prompt(action)
         else:
             self._agent.send_command(action)
 
@@ -207,8 +272,6 @@ class VoiceDev:
 
                 audio = self._capture.record_while_key_held("space")
 
-                self._capture.stop_stream()
-
                 if len(audio) > 0:
                     self._process_audio(audio)
                 else:
@@ -218,7 +281,8 @@ class VoiceDev:
                 time.sleep(0.05)
 
     def _run_continuous_loop(self) -> None:
-        self._tui.console.print("[dim]Continuous mode: Speak naturally. VAD will detect speech.[/dim]\n")
+        self._tui.console.print("[dim]Continuous mode: Speak naturally. VAD will detect speech.[/dim]")
+        self._tui.console.print(f"[dim]Say '{self.config.wake_word}' before each command.[/dim]\n")
 
         self._capture.start_stream()
 
