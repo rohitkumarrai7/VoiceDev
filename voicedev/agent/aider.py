@@ -87,7 +87,7 @@ class AiderBackend(AgentBackend):
         else:
             base = [aider_path]
 
-        auto_flags = ["--no-pretty", "--no-gitignore", "--no-auto-commits", "--yes-always", "--map-tokens", "256"]
+        auto_flags = ["--no-pretty", "--no-gitignore", "--no-auto-commits", "--yes-always", "--map-tokens", "256", "--no-auto-lint"]
         for flag in auto_flags:
             if flag not in self._extra_args:
                 base.append(flag)
@@ -134,12 +134,16 @@ class AiderBackend(AgentBackend):
         print(f"[VoiceDev] Launching (Windows console mode): {cmd_str}")
 
         try:
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["TERM"] = "dumb"
             kwargs = {
                 "stdin": subprocess.PIPE,
                 "stdout": None,
                 "stderr": None,
                 "text": True,
                 "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
+                "env": env,
             }
 
             self._process = subprocess.Popen(cmd, **kwargs)
