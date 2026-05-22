@@ -11,3 +11,4 @@ build/
 *.egg
 Vocoder_Master_Build_Prompt.pdf
 problem_statements.md
+.aider/

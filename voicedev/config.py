@@ -103,4 +103,11 @@ def _resolve_auto_backend(merged: dict) -> dict:
                 merged["stt_backend"] = "whisper_api"
             else:
                 merged["stt_backend"] = "faster_whisper"
+        # Add a check for whisper_api availability
+        if merged["stt_backend"] == "whisper_api":
+            try:
+                import openai
+                openai.OpenAI()
+            except Exception:
+                merged["stt_backend"] = "faster_whisper"
     return merged

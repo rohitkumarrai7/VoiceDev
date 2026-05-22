@@ -87,10 +87,24 @@ class AiderBackend(AgentBackend):
         else:
             base = [aider_path]
 
-        auto_flags = ["--no-pretty", "--no-gitignore"]
+        auto_flags = ["--no-pretty", "--no-gitignore", "--no-auto-commits", "--yes-always", "--map-tokens", "256"]
         for flag in auto_flags:
             if flag not in self._extra_args:
                 base.append(flag)
+
+        groq_key = os.environ.get("GROQ_API_KEY", "")
+        if groq_key:
+            base.append("--openai-api-key")
+            base.append(groq_key)
+            base.append("--openai-api-base")
+            base.append("https://api.groq.com/v1")
+
+        model_in_extra = any(
+            arg.startswith("--model") for arg in self._extra_args
+        )
+        if not model_in_extra:
+            base.append("--model")
+            base.append("groq/llama-3.3-70b-versatile")
 
         base.extend(self._extra_args)
         return base
