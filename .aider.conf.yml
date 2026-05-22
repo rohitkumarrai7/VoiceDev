@@ -1,0 +1,4 @@
+model: minimax/minimax-m2.5
+gitignore: false
+pretty: false
+auto-commits: false

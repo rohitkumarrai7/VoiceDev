@@ -92,19 +92,19 @@ class AiderBackend(AgentBackend):
             if flag not in self._extra_args:
                 base.append(flag)
 
-        groq_key = os.environ.get("GROQ_API_KEY", "")
-        if groq_key:
+        minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+        if minimax_key:
             base.append("--openai-api-key")
-            base.append(groq_key)
+            base.append(minimax_key)
             base.append("--openai-api-base")
-            base.append("https://api.groq.com/v1")
+            base.append("https://api.minimaxi.chat/v1")
 
         model_in_extra = any(
             arg.startswith("--model") for arg in self._extra_args
         )
         if not model_in_extra:
             base.append("--model")
-            base.append("groq/llama-3.3-70b-versatile")
+            base.append("minimax/minimax-m2.5")
 
         base.extend(self._extra_args)
         return base
