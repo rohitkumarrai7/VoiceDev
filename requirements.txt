@@ -1,0 +1,13 @@
+sounddevice>=0.4.6
+webrtcvad-wheels>=2.0.14
+numpy>=1.24
+scipy>=1.10
+noisereduce>=3.0
+openai>=1.0
+faster-whisper>=0.10
+groq>=0.5.0
+rich>=13.0
+keyboard>=0.13
+rapidfuzz>=3.0
+pyyaml>=6.0
+python-dotenv>=1.0
