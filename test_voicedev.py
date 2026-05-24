@@ -9,6 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from voicedev.agent.aider import AiderBackend
 from voicedev.commands.router import CommandRouter
+from voicedev.stt.base import TranscriptionResult
+from voicedev.audio.feedback import AudioFeedback
+from voicedev.audio.wakeword import WakeWordDetector
 
 
 def test_aider_found():
@@ -21,7 +24,7 @@ def test_aider_found():
         return True
     else:
         print("FAIL: Aider not found")
-        print("   Fix: uv tool install aider-chat")
+        print("   Fix: pip install aider-chat")
         return False
 
 
@@ -31,7 +34,7 @@ def test_aider_starts():
     print("TEST 2: Aider process starts and accepts stdin")
     print("=" * 60)
 
-    agent = AiderBackend()
+    agent = AiderBackend(auto_restart=False)
     try:
         agent.start()
         time.sleep(3.0)
@@ -64,7 +67,7 @@ def test_aider_starts():
 def test_command_router():
     print()
     print("=" * 60)
-    print("TEST 3: Command router intercepts meta-commands")
+    print("TEST 3: Command router (30+ commands)")
     print("=" * 60)
 
     router = CommandRouter()
@@ -72,12 +75,21 @@ def test_command_router():
     test_cases = [
         ("show diff", True, "/diff"),
         ("undo that", True, "/undo"),
+        ("cancel that", True, "/undo"),
         ("run tests", True, "/run pytest"),
+        ("commit changes", True, "/commit"),
+        ("architect mode", True, "/chat-mode architect"),
+        ("list files", True, "list_files"),
+        ("show history", True, "show_history"),
+        ("help me", True, "help"),
+        ("git status", True, "/git status"),
         ("exit", True, "shutdown"),
         ("yes", True, "Y"),
         ("no", True, "N"),
-        ("Create a function", False, None),
+        ("Create a function that parses JSON", False, None),
         ("add file main.py", True, "/add main.py"),
+        ("drop file utils.py", True, "/drop utils.py"),
+        ("run command ls -la", True, "/run ls -la"),
     ]
 
     all_pass = True
@@ -97,7 +109,7 @@ def test_command_router():
                 all_pass = False
                 continue
 
-        print(f"PASS: '{text}' -> {'CMD' if is_cmd else 'QUERY'}")
+        print(f"PASS: '{text}' -> {'CMD: ' + result[1] if is_cmd else 'QUERY'}")
 
     return all_pass
 
@@ -108,7 +120,7 @@ def test_prompt_detection():
     print("TEST 4: Prompt pattern detection")
     print("=" * 60)
 
-    agent = AiderBackend()
+    agent = AiderBackend(auto_restart=False)
     test_lines = [
         ("Accept this change? (Y/n)", True),
         ("Add main.py to the chat? (Y/n)", True),
@@ -132,17 +144,77 @@ def test_prompt_detection():
     return all_pass
 
 
+def test_transcription_result():
+    print()
+    print("=" * 60)
+    print("TEST 5: TranscriptionResult confidence scoring")
+    print("=" * 60)
+
+    r = TranscriptionResult(text="hello world", confidence=0.92)
+    assert r.has_confidence is True
+    assert r.confidence_pct == "92%"
+    print(f"PASS: Confidence 0.92 -> {r.confidence_pct}")
+
+    r2 = TranscriptionResult(text="test")
+    assert r2.has_confidence is False
+    assert r2.confidence_pct == "n/a"
+    print(f"PASS: No confidence -> {r2.confidence_pct}")
+
+    return True
+
+
+def test_audio_feedback():
+    print()
+    print("=" * 60)
+    print("TEST 6: Audio feedback tone generation")
+    print("=" * 60)
+
+    fb = AudioFeedback(enabled=False)
+    for name in ["start", "stop", "success", "error", "command", "cancel"]:
+        tone = fb._get_tone(name)
+        assert tone is not None
+        assert len(tone) > 0
+        print(f"PASS: Tone '{name}' generated ({len(tone)} samples)")
+
+    return True
+
+
+def test_wake_word():
+    print()
+    print("=" * 60)
+    print("TEST 7: Wake word detection")
+    print("=" * 60)
+
+    detector = WakeWordDetector(phrase="hey dev")
+    print(f"  Backend: {detector.backend_name}")
+
+    assert detector.detect_text("hey dev start coding") is True
+    print("PASS: Detected 'hey dev' in text")
+
+    assert detector.detect_text("anything else") is True
+    print("PASS: Armed state passes through")
+
+    detector.disarm()
+    assert detector.detect_text("random words") is False
+    print("PASS: Disarmed rejects non-wake text")
+
+    return True
+
+
 def main():
     print()
     print("=" * 60)
-    print("VoiceDev Integration Test Suite")
+    print("VoiceDev Integration Test Suite v0.2")
     print("=" * 60)
 
     results = []
     results.append(("Aider Found", test_aider_found()))
     results.append(("Aider Starts", test_aider_starts()))
-    results.append(("Command Router", test_command_router()))
+    results.append(("Command Router (30+)", test_command_router()))
     results.append(("Prompt Detection", test_prompt_detection()))
+    results.append(("Confidence Scoring", test_transcription_result()))
+    results.append(("Audio Feedback", test_audio_feedback()))
+    results.append(("Wake Word", test_wake_word()))
 
     print()
     print("=" * 60)
@@ -157,11 +229,8 @@ def main():
     print()
     if all_passed:
         print("ALL TESTS PASSED")
-        print()
-        print("Run VoiceDev with:")
-        print("  $env:PATH = 'C:\\Users\\rohit\\.local\\bin;' + $env:PATH; python -m voicedev.main")
     else:
-        print("SOME TESTS FAILED -- fix issues above first.")
+        print("SOME TESTS FAILED — fix issues above first.")
 
     return 0 if all_passed else 1
 

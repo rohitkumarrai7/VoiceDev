@@ -11,7 +11,6 @@ from voicedev.agent.base import AgentBackend
 
 try:
     import pexpect
-
     PEXPECT_AVAILABLE = True
 except ImportError:
     PEXPECT_AVAILABLE = False
@@ -32,7 +31,10 @@ class AiderBackend(AgentBackend):
         re.compile(r"Add \.aider\* to \.gitignore", re.IGNORECASE),
     ]
 
-    def __init__(self, extra_args: Optional[List[str]] = None):
+    MAX_RESTARTS = 3
+    RESTART_BACKOFF_BASE = 2.0
+
+    def __init__(self, extra_args: Optional[List[str]] = None, auto_restart: bool = True):
         self._extra_args = extra_args or []
         self._child = None
         self._process: Optional[subprocess.Popen] = None
@@ -43,38 +45,39 @@ class AiderBackend(AgentBackend):
         self._output_buffer: List[str] = []
         self._use_pexpect = False
         self._is_windows = sys.platform == "win32"
+        self._auto_restart = auto_restart
+        self._restart_count = 0
+        self._last_start_time = 0.0
+        self._on_restart_cb = None
+
+    def set_on_restart(self, callback) -> None:
+        self._on_restart_cb = callback
 
     @staticmethod
     def _resolve_aider_path() -> Optional[str]:
         for name in ["aider", "aider.exe", "aider.bat", "aider.cmd"]:
             path = shutil.which(name)
             if path:
-                print(f"[VoiceDev] Found aider via PATH: {path}")
                 return path
 
         uv_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")
         for name in ["aider", "aider.exe", "aider.bat"]:
             candidate = os.path.join(uv_bin, name)
             if os.path.exists(candidate):
-                print(f"[VoiceDev] Found aider in uv bin: {candidate}")
                 return candidate
 
         scripts_dir = os.path.join(os.path.dirname(sys.executable), "Scripts")
         for name in ["aider.exe", "aider.bat", "aider.cmd"]:
             candidate = os.path.join(scripts_dir, name)
             if os.path.exists(candidate):
-                print(f"[VoiceDev] Found aider in Scripts: {candidate}")
                 return candidate
 
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "aider", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=10,
+                capture_output=True, text=True, timeout=10,
             )
             if result.returncode == 0:
-                print("[VoiceDev] Found aider as Python module")
                 return sys.executable
         except Exception:
             pass
@@ -87,37 +90,34 @@ class AiderBackend(AgentBackend):
         else:
             base = [aider_path]
 
-        auto_flags = ["--no-pretty", "--no-gitignore", "--no-auto-commits", "--yes-always", "--map-tokens", "256", "--no-auto-lint"]
+        auto_flags = [
+            "--no-pretty", "--no-gitignore", "--no-auto-commits",
+            "--yes-always", "--map-tokens", "256", "--no-auto-lint",
+        ]
         for flag in auto_flags:
             if flag not in self._extra_args:
                 base.append(flag)
 
         minimax_key = os.environ.get("MINIMAX_API_KEY", "")
         if minimax_key:
-            base.append("--openai-api-key")
-            base.append(minimax_key)
-            base.append("--openai-api-base")
-            base.append("https://api.minimaxi.chat/v1")
+            base.extend(["--openai-api-key", minimax_key])
+            base.extend(["--openai-api-base", "https://api.minimaxi.chat/v1"])
 
-        model_in_extra = any(
-            arg.startswith("--model") for arg in self._extra_args
-        )
-        if not model_in_extra:
-            base.append("--model")
-            base.append("minimax/minimax-m2.5")
+        model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
+        if not model_in_extra and minimax_key:
+            base.extend(["--model", "minimax/minimax-m2.5"])
 
         base.extend(self._extra_args)
         return base
 
     def start(self) -> None:
+        self._last_start_time = time.time()
         aider_path = self._resolve_aider_path()
 
         if aider_path is None:
-            print("\n[VoiceDev] ERROR: 'aider' not found.")
-            print("[VoiceDev] Install with one of:")
-            print("[VoiceDev]   uv tool install aider-chat")
-            print("[VoiceDev]   pip install aider-chat")
-            print("[VoiceDev] Falling back to echo mode.\n")
+            print("\n[VoiceDev] WARNING: 'aider' not found.")
+            print("[VoiceDev] Install with: pip install aider-chat  OR  uv tool install aider-chat")
+            print("[VoiceDev] Running in echo mode — voice input will be displayed but not sent to an agent.\n")
             self._running = True
             return
 
@@ -131,38 +131,33 @@ class AiderBackend(AgentBackend):
     def _start_windows_mode(self, aider_path: str) -> None:
         cmd = self._build_cmd(aider_path)
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
-        print(f"[VoiceDev] Launching (Windows console mode): {cmd_str}")
+        print(f"[VoiceDev] Launching: {cmd_str}")
 
         try:
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
             env["TERM"] = "dumb"
-            kwargs = {
-                "stdin": subprocess.PIPE,
-                "stdout": None,
-                "stderr": None,
-                "text": True,
-                "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
-                "env": env,
-            }
 
-            self._process = subprocess.Popen(cmd, **kwargs)
+            self._process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=None,
+                stderr=None,
+                text=True,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                env=env,
+            )
             self._running = True
             self._use_pexpect = False
 
-            self._reader_thread = threading.Thread(
-                target=self._watchdog_windows, daemon=True
-            )
+            self._reader_thread = threading.Thread(target=self._watchdog_windows, daemon=True)
             self._reader_thread.start()
 
             time.sleep(2.0)
-
-            print(f"[VoiceDev] Aider started (PID {self._process.pid}, Windows console mode)")
-            print("[VoiceDev] Aider output renders directly on terminal below")
-            print("[VoiceDev] Speak your commands while holding SPACE\n")
+            print(f"[VoiceDev] Aider started (PID {self._process.pid})")
 
         except Exception as e:
-            print(f"[VoiceDev] ERROR: Could not launch aider: {e}")
+            print(f"[VoiceDev] ERROR launching aider: {e}")
             self._running = True
 
     def _watchdog_windows(self) -> None:
@@ -172,6 +167,10 @@ class AiderBackend(AgentBackend):
             self._process.wait()
         except Exception:
             pass
+
+        if self._auto_restart and self._attempt_restart():
+            return
+
         self._running = False
         print("\n[VoiceDev] Aider process exited.")
 
@@ -186,9 +185,7 @@ class AiderBackend(AgentBackend):
             self._running = True
             self._use_pexpect = True
 
-            self._reader_thread = threading.Thread(
-                target=self._read_output_pexpect, daemon=True
-            )
+            self._reader_thread = threading.Thread(target=self._read_output_pexpect, daemon=True)
             self._reader_thread.start()
             time.sleep(1.5)
 
@@ -222,6 +219,8 @@ class AiderBackend(AgentBackend):
         except Exception:
             pass
         finally:
+            if self._auto_restart and self._attempt_restart():
+                return
             self._running = False
             print("[VoiceDev] Aider process exited.")
 
@@ -240,9 +239,7 @@ class AiderBackend(AgentBackend):
             self._running = True
             self._use_pexpect = False
 
-            self._reader_thread = threading.Thread(
-                target=self._read_output_subprocess, daemon=True
-            )
+            self._reader_thread = threading.Thread(target=self._read_output_subprocess, daemon=True)
             self._reader_thread.start()
 
             print(f"[VoiceDev] Aider started (PID {self._process.pid}, subprocess mode)")
@@ -270,8 +267,35 @@ class AiderBackend(AgentBackend):
         except Exception:
             pass
         finally:
+            if self._auto_restart and self._attempt_restart():
+                return
             self._running = False
             print("[VoiceDev] Aider process exited.")
+
+    def _attempt_restart(self) -> bool:
+        uptime = time.time() - self._last_start_time
+        if uptime < 5.0:
+            return False
+        if self._restart_count >= self.MAX_RESTARTS:
+            print(f"[VoiceDev] Aider crashed {self._restart_count} times. Giving up.")
+            return False
+
+        self._restart_count += 1
+        delay = self.RESTART_BACKOFF_BASE ** self._restart_count
+        print(f"[VoiceDev] Aider exited unexpectedly. Restarting in {delay:.0f}s "
+              f"(attempt {self._restart_count}/{self.MAX_RESTARTS})...")
+        time.sleep(delay)
+
+        if self._on_restart_cb:
+            try:
+                self._on_restart_cb(self._restart_count)
+            except Exception:
+                pass
+
+        self._process = None
+        self._child = None
+        self.start()
+        return self._running
 
     def _detect_prompt(self, line: str) -> None:
         for pattern in self.PROMPT_PATTERNS:
@@ -306,7 +330,7 @@ class AiderBackend(AgentBackend):
 
     def send_query(self, text: str) -> None:
         if not self._running:
-            print(f"[VoiceDev] (echo, agent not running) {text}")
+            print(f"[VoiceDev] (echo) {text}")
             return
         self._send_raw(text)
 
@@ -323,12 +347,13 @@ class AiderBackend(AgentBackend):
                 self._process.stdin.write(text + "\n")
                 self._process.stdin.flush()
             else:
-                print(f"[VoiceDev] (echo, no channel) {text}")
+                print(f"[VoiceDev] (echo) {text}")
         except (BrokenPipeError, OSError, ValueError) as e:
             print(f"[VoiceDev] ERROR sending to aider: {e}")
             self._running = False
 
     def stop(self) -> None:
+        self._auto_restart = False
         self._running = False
         self.clear_pending_prompt()
 
@@ -360,8 +385,7 @@ class AiderBackend(AgentBackend):
                 if self._is_windows:
                     subprocess.run(
                         ["taskkill", "/PID", str(self._process.pid), "/T", "/F"],
-                        capture_output=True,
-                        timeout=5,
+                        capture_output=True, timeout=5,
                     )
                 else:
                     self._process.terminate()

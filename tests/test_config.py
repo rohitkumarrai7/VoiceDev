@@ -12,6 +12,10 @@ class TestConfig:
         assert config.vad_aggressiveness == 2
         assert config.silence_threshold_ms == 1200
         assert config.noise_reduction is True
+        assert config.audio_feedback is True
+        assert config.show_confidence is True
+        assert config.confirm_before_send is False
+        assert config.confirmation_timeout_s == 2.0
 
     def test_config_dir(self):
         assert VoiceDevConfig.config_dir() == Path.home() / ".voicedev"
@@ -22,6 +26,22 @@ class TestConfig:
     def test_load_with_overrides(self):
         config = VoiceDevConfig.load({"noise_reduction": False})
         assert config.noise_reduction is False
+
+    def test_load_with_new_fields(self):
+        config = VoiceDevConfig.load({
+            "audio_feedback": False,
+            "show_confidence": False,
+            "confirm_before_send": True,
+            "confirmation_timeout_s": 3.5,
+        })
+        assert config.audio_feedback is False
+        assert config.show_confidence is False
+        assert config.confirm_before_send is True
+        assert config.confirmation_timeout_s == 3.5
+
+    def test_load_ignores_unknown_keys(self):
+        config = VoiceDevConfig.load({"unknown_future_key": "value"})
+        assert not hasattr(config, "unknown_future_key")
 
     def test_save_and_load(self, tmp_path):
         config = VoiceDevConfig()
@@ -37,6 +57,8 @@ class TestConfig:
             loaded = VoiceDevConfig.load()
             assert loaded.noise_reduction == config.noise_reduction
             assert loaded.vad_aggressiveness == config.vad_aggressiveness
+            assert loaded.audio_feedback == config.audio_feedback
+            assert loaded.show_confidence == config.show_confidence
 
     def test_ensure_dirs(self, tmp_path):
         config = VoiceDevConfig()

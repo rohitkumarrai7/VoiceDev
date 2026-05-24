@@ -1,7 +1,7 @@
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 class SessionLogger:
@@ -11,11 +11,14 @@ class SessionLogger:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self._filepath = self._session_dir / f"{timestamp}.md"
         self._start_time = time.time()
-        self._entries = []
+        self._entries: List[dict] = []
         self._query_count = 0
+        self._command_count = 0
         self._total_audio_duration = 0.0
         self._stt_backend = "unknown"
         self._cost_per_min = 0.0
+        self._avg_confidence = 0.0
+        self._confidence_samples = 0
 
     @property
     def filepath(self) -> Path:
@@ -36,9 +39,16 @@ class SessionLogger:
         is_command: bool = False,
         latency_ms: float = 0.0,
         audio_duration_s: float = 0.0,
+        confidence: float = -1.0,
     ) -> None:
         self._query_count += 1
+        if is_command:
+            self._command_count += 1
         self._total_audio_duration += audio_duration_s
+
+        if confidence >= 0:
+            self._confidence_samples += 1
+            self._avg_confidence += (confidence - self._avg_confidence) / self._confidence_samples
 
         entry = {
             "timestamp": datetime.now().strftime("%H:%M:%S"),
@@ -46,6 +56,7 @@ class SessionLogger:
             "is_command": is_command,
             "latency_ms": round(latency_ms, 1),
             "audio_duration_s": round(audio_duration_s, 2),
+            "confidence": round(confidence, 3) if confidence >= 0 else None,
         }
         self._entries.append(entry)
         self._flush()
@@ -55,24 +66,27 @@ class SessionLogger:
         estimated_cost = (self._total_audio_duration / 60.0) * self._cost_per_min
 
         lines = [
-            f"# VoiceDev Session Log",
-            f"",
-            f"- **Date:** {datetime.now().strftime('%Y-%m-%d')}",
-            f"- **Duration:** {duration:.0f}s",
+            "# VoiceDev Session Log",
+            "",
+            f"- **Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"- **Duration:** {duration:.0f}s ({duration / 60:.1f} min)",
             f"- **STT Backend:** {self._stt_backend}",
-            f"- **Voice queries:** {self._query_count}",
+            f"- **Voice queries:** {self._query_count} ({self._command_count} commands)",
             f"- **Total audio:** {self._total_audio_duration:.1f}s",
             f"- **Est. STT cost:** ${estimated_cost:.4f}",
-            f"",
-            f"## Transcript",
-            f"",
         ]
+
+        if self._confidence_samples > 0:
+            lines.append(f"- **Avg. confidence:** {self._avg_confidence * 100:.1f}%")
+
+        lines.extend(["", "## Transcript", ""])
 
         for i, entry in enumerate(self._entries, 1):
             kind = "command" if entry["is_command"] else "query"
+            conf = f", {entry['confidence'] * 100:.0f}% conf" if entry["confidence"] is not None else ""
             lines.append(
                 f"{i}. **[{entry['timestamp']}]** ({kind}) `{entry['text']}` "
-                f"— {entry['latency_ms']}ms latency, {entry['audio_duration_s']}s audio"
+                f"— {entry['latency_ms']}ms latency, {entry['audio_duration_s']}s audio{conf}"
             )
 
         self._filepath.write_text("\n".join(lines), encoding="utf-8")

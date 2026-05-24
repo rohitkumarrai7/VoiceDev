@@ -1,14 +1,24 @@
+# Environment & secrets
 .env
 .env.local
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+*.egg
 dist/
 build/
 .pytest_cache/
+
+# VoiceDev runtime data
 .voicedev/
-*.egg
+
+# Aider dev artifacts
+.aider/
+.aider.*
+
+# Project-specific (not for submission)
 Vocoder_Master_Build_Prompt.pdf
 problem_statements.md
-.aider/

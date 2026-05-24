@@ -16,10 +16,12 @@ from voicedev.config import VoiceDevConfig
 from voicedev.audio.capture import AudioCapture
 from voicedev.audio.vad import VoiceActivityDetector
 from voicedev.audio.noise import reduce_noise
+from voicedev.audio.feedback import AudioFeedback
+from voicedev.audio.wakeword import WakeWordDetector
 from voicedev.stt.whisper_api import WhisperAPIBackend
 from voicedev.stt.faster_whisper import FasterWhisperBackend
 from voicedev.stt.groq_whisper import GroqWhisperBackend
-from voicedev.stt.base import STTBackend
+from voicedev.stt.base import STTBackend, TranscriptionResult
 from voicedev.agent.base import AgentBackend
 from voicedev.agent.aider import AiderBackend
 from voicedev.commands.router import CommandRouter
@@ -31,28 +33,6 @@ STT_COST_PER_MIN = {
     "whisper_api": 0.006,
     "faster_whisper": 0.0,
 }
-
-
-class WakeWordDetector:
-    def __init__(self, phrase: str = "hey dev"):
-        self.phrase = phrase.lower()
-        self._armed = False
-
-    def process(self, text: str) -> bool:
-        if self._armed:
-            return True
-        text_lower = text.lower().strip()
-        if self.phrase in text_lower or text_lower in self.phrase:
-            self._armed = True
-            return True
-        return False
-
-    def disarm(self) -> None:
-        self._armed = False
-
-    @property
-    def armed(self) -> bool:
-        return self._armed
 
 
 class VoiceDev:
@@ -67,10 +47,11 @@ class VoiceDev:
         self._capture = AudioCapture()
         self._vad = VoiceActivityDetector(aggressiveness=config.vad_aggressiveness)
         self._router = CommandRouter()
+        self._feedback = AudioFeedback(enabled=config.audio_feedback)
+        self._wake = WakeWordDetector(phrase=config.wake_word)
         self._stt: Optional[STTBackend] = None
         self._agent: Optional[AgentBackend] = None
         self._logger: Optional[SessionLogger] = None
-        self._wake = WakeWordDetector(phrase=config.wake_word)
 
     def _init_stt(self) -> STTBackend:
         if self.config.stt_backend == "groq_whisper":
@@ -107,13 +88,23 @@ class VoiceDev:
         return FasterWhisperBackend(model_size=self.config.faster_whisper_model)
 
     def _init_agent(self) -> AgentBackend:
-        return AiderBackend(extra_args=self.config.aider_args)
+        backend = AiderBackend(extra_args=self.config.aider_args)
+        backend.set_on_restart(self._on_agent_restart)
+        return backend
+
+    def _on_agent_restart(self, attempt: int) -> None:
+        self._tui.console.print(
+            f"[bold yellow]Aider restarting (attempt {attempt})...[/bold yellow]"
+        )
+        self._feedback.play("error")
 
     def start(self) -> None:
         self.config.ensure_dirs()
 
         self._stt = self._init_stt()
         self._tui.set_stt_backend(self._stt.name())
+        self._tui.set_show_confidence(self.config.show_confidence)
+        self._tui.set_wake_backend(self._wake.backend_name)
 
         stt_cost = STT_COST_PER_MIN.get(self._stt.name(), 0.0)
         self._tui.set_stt_cost_per_min(stt_cost)
@@ -129,7 +120,6 @@ class VoiceDev:
         self._tui.print_status()
 
         self._running = True
-
         signal.signal(signal.SIGINT, self._handle_signal)
 
         try:
@@ -152,6 +142,7 @@ class VoiceDev:
         if self._logger:
             self._logger.close()
         self._capture.close()
+        self._feedback.play("stop")
         self._tui.console.print("[bold cyan]VoiceDev stopped. Session log saved.[/bold cyan]")
 
     def _process_audio(self, audio: np.ndarray) -> None:
@@ -163,25 +154,29 @@ class VoiceDev:
             self._tui.print_status()
             audio = reduce_noise(audio)
 
+        self._feedback.play("stop")
+
         start_time = time.time()
         try:
-            text = self._stt.transcribe(audio)
+            result: TranscriptionResult = self._stt.transcribe(audio)
         except Exception as e:
             self._tui.console.print(f"[bold red]STT Error: {e}[/bold red]")
+            self._feedback.play("error")
             self._tui.set_state(TUIDisplay.STATE_IDLE)
             self._tui.print_status()
             return
         latency_ms = (time.time() - start_time) * 1000
 
-        if not text or not text.strip():
+        text = result.text.strip() if result.text else ""
+        confidence = result.confidence
+
+        if not text:
             self._tui.set_state(TUIDisplay.STATE_IDLE)
             self._tui.print_status()
             return
 
-        text = text.strip()
-
         if self._mode == "Continuous":
-            if not self._wake.process(text):
+            if not self._wake.detect_text(text):
                 self._tui.console.print(f"[dim]Wake word required. Heard: '{text}'[/dim]")
                 self._tui.set_state(TUIDisplay.STATE_IDLE)
                 self._tui.print_status()
@@ -189,7 +184,18 @@ class VoiceDev:
             text = text.lower().replace(self._wake.phrase, "").strip()
             if not text:
                 self._tui.console.print("[green]Wake word detected. Listening...[/green]")
+                self._feedback.play("command")
                 self._tui.set_state(TUIDisplay.STATE_LISTENING)
+                self._tui.print_status()
+                return
+
+        # Confirmation flow
+        if self.config.confirm_before_send:
+            confirmed = self._confirm_transcription(text)
+            if not confirmed:
+                self._feedback.play("cancel")
+                self._tui.print_cancelled()
+                self._tui.set_state(TUIDisplay.STATE_IDLE)
                 self._tui.print_status()
                 return
 
@@ -200,10 +206,11 @@ class VoiceDev:
         if pending:
             self._tui.console.print(f"[yellow]Aider asks: {pending}[/yellow]")
             self._tui.console.print(f"[green]Voice responding: {text}[/green]")
-            self._tui.record_transcription(text, True, audio_duration, latency_ms)
+            self._tui.record_transcription(text, True, audio_duration, latency_ms, confidence)
             if self._logger:
-                self._logger.log_entry(f"[prompt response] {text}", True, latency_ms, audio_duration)
+                self._logger.log_entry(f"[prompt response] {text}", True, latency_ms, audio_duration, confidence)
             self._agent.respond_to_prompt(text)
+            self._feedback.play("success")
             self._tui.set_state(TUIDisplay.STATE_IDLE)
             self._tui.print_status()
             return
@@ -211,18 +218,20 @@ class VoiceDev:
         command_result = self._router.route(text)
         is_command = command_result is not None
 
-        self._tui.record_transcription(text, is_command, audio_duration, latency_ms)
+        self._tui.record_transcription(text, is_command, audio_duration, latency_ms, confidence)
         if self._logger:
-            self._logger.log_entry(text, is_command, latency_ms, audio_duration)
+            self._logger.log_entry(text, is_command, latency_ms, audio_duration, confidence)
 
         self._tui.set_state(TUIDisplay.STATE_SENT)
-        self._tui.print_transcription(text, is_command)
+        self._tui.print_transcription(text, is_command, confidence)
         self._tui.print_status()
 
         if is_command:
             phrase, action = command_result
+            self._feedback.play("command")
             self._handle_command(action)
         else:
+            self._feedback.play("success")
             self._agent.send_query(text)
 
         if self._mode == "Continuous":
@@ -231,6 +240,35 @@ class VoiceDev:
         time.sleep(0.3)
         self._tui.set_state(TUIDisplay.STATE_IDLE)
         self._tui.print_status()
+
+    def _confirm_transcription(self, text: str) -> bool:
+        """Show transcription and wait for voice confirmation or timeout."""
+        self._tui.set_state(TUIDisplay.STATE_CONFIRMING)
+        self._tui.print_confirmation_prompt(text, self.config.confirmation_timeout_s)
+
+        deadline = time.time() + self.config.confirmation_timeout_s
+        while time.time() < deadline:
+            if not self._running:
+                return False
+
+            if self._mode == "PTT":
+                import keyboard
+                if keyboard.is_pressed("space"):
+                    quick_audio = self._capture.record_while_key_held("space")
+                    if len(quick_audio) > 0:
+                        try:
+                            quick_result = self._stt.transcribe(quick_audio)
+                            word = quick_result.text.lower().strip()
+                        except Exception:
+                            word = ""
+                        if word in ("cancel", "no", "stop", "discard", "not that", "wrong"):
+                            return False
+                        if word in ("send", "yes", "go", "confirm", "ok"):
+                            return True
+            time.sleep(0.1)
+
+        self._tui.print_auto_sent()
+        return True
 
     def _handle_command(self, action: str) -> None:
         if action == "pause":
@@ -243,7 +281,9 @@ class VoiceDev:
             self._mode = "Continuous"
             self._tui.set_mode("Continuous")
             self._tui.console.print("[green]Switched to Continuous (hands-free) mode.[/green]")
-            self._tui.console.print(f"[dim]Say your wake word ('{self.config.wake_word}') before each command.[/dim]")
+            self._tui.console.print(f"[dim]Say '{self.config.wake_word}' before each command.[/dim]")
+            if not self._capture.is_streaming:
+                self._capture.start_stream()
         elif action == "mode_manual":
             self._mode = "PTT"
             self._tui.set_mode("PTT")
@@ -253,6 +293,15 @@ class VoiceDev:
         elif action in ("Y", "y", "N", "n"):
             if hasattr(self._agent, "respond_to_prompt"):
                 self._agent.respond_to_prompt(action)
+        elif action == "list_files":
+            file_list = CommandRouter.list_project_files()
+            self._tui.print_file_list(file_list)
+        elif action == "show_status":
+            self._tui.print_status()
+        elif action == "show_history":
+            self._tui.print_history(self._router.history)
+        elif action == "help":
+            self._tui.print_help(CommandRouter.get_help_text())
         else:
             self._agent.send_command(action)
 
@@ -267,6 +316,7 @@ class VoiceDev:
                     time.sleep(0.1)
                     continue
 
+                self._feedback.play("start")
                 self._tui.set_state(TUIDisplay.STATE_RECORDING)
                 self._tui.print_status()
 
@@ -303,12 +353,13 @@ class VoiceDev:
             )
 
             if audio is not None and len(audio) > 0:
+                self._feedback.play("start")
                 self._process_audio(audio)
 
             time.sleep(0.05)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(
         prog="voicedev",
         description="VoiceDev — Voice-first interface for terminal coding agents",
@@ -336,13 +387,27 @@ def parse_args() -> argparse.Namespace:
         help="Disable noise reduction preprocessing",
     )
     parser.add_argument(
+        "--no-feedback",
+        action="store_true",
+        help="Disable audio feedback beeps",
+    )
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Enable confirmation before sending to agent",
+    )
+    parser.add_argument(
+        "--no-confidence",
+        action="store_true",
+        help="Hide STT confidence scores",
+    )
+    parser.add_argument(
         "--stats",
         action="store_true",
         help="Show session stats and exit",
     )
 
     args, remaining = parser.parse_known_args()
-
     return args, remaining
 
 
@@ -375,6 +440,12 @@ def main() -> None:
         overrides["faster_whisper_model"] = args.whisper_model
     if args.no_noise_reduction:
         overrides["noise_reduction"] = False
+    if args.no_feedback:
+        overrides["audio_feedback"] = False
+    if args.confirm:
+        overrides["confirm_before_send"] = True
+    if args.no_confidence:
+        overrides["show_confidence"] = False
     if aider_extra:
         overrides["aider_args"] = aider_extra
 

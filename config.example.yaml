@@ -1,14 +1,19 @@
-# VoiceDev Configuration Example
+# VoiceDev Configuration
 # Copy to ~/.voicedev/config.yaml and customize
 
-stt_backend: auto              # auto | whisper_api | faster_whisper
-faster_whisper_model: base.en  # tiny.en | base.en | small.en | medium.en
-whisper_language: en           # ISO 639-1 language code
-vad_aggressiveness: 2          # 0-3 (higher = more aggressive)
-silence_threshold_ms: 1200     # ms of silence before stopping
-ptt_key: space                 # Key for push-to-talk mode
-agent: aider                   # aider (more agents in future)
-aider_args: []                 # Extra args passed to aider
-wake_word: hey dev             # Wake word for continuous mode
-noise_reduction: true          # Enable noise cancellation
-session_logging: true          # Save session transcripts
+stt_backend: auto                   # auto | groq_whisper | whisper_api | faster_whisper
+faster_whisper_model: base.en       # tiny.en | base.en | small.en | medium.en
+groq_whisper_model: whisper-large-v3-turbo  # Groq Whisper model name
+whisper_language: en                # ISO 639-1 language code
+vad_aggressiveness: 2               # 0-3 (higher = more aggressive)
+silence_threshold_ms: 1200          # ms of silence before stopping
+ptt_key: space                      # Key for push-to-talk mode
+agent: aider                        # aider (more agents planned)
+aider_args: []                      # Extra args passed to aider
+wake_word: hey dev                  # Wake word for continuous mode
+noise_reduction: true               # Enable noise cancellation
+session_logging: true               # Save session transcripts
+audio_feedback: true                # Play beep sounds on state changes
+confirm_before_send: false          # Show transcription and wait for confirmation
+confirmation_timeout_s: 2.0         # Seconds to wait before auto-sending (if confirm enabled)
+show_confidence: true               # Display STT confidence scores

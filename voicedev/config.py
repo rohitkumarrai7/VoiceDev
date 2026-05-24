@@ -19,6 +19,10 @@ DEFAULT_CONFIG = {
     "wake_word": "hey dev",
     "noise_reduction": True,
     "session_logging": True,
+    "audio_feedback": True,
+    "confirm_before_send": False,
+    "confirmation_timeout_s": 2.0,
+    "show_confidence": True,
 }
 
 
@@ -36,6 +40,10 @@ class VoiceDevConfig:
     wake_word: str = "hey dev"
     noise_reduction: bool = True
     session_logging: bool = True
+    audio_feedback: bool = True
+    confirm_before_send: bool = False
+    confirmation_timeout_s: float = 2.0
+    show_confidence: bool = True
 
     @classmethod
     def config_dir(cls) -> Path:
@@ -63,7 +71,10 @@ class VoiceDevConfig:
             merged.update(overrides)
 
         resolved = _resolve_auto_backend(merged)
-        return cls(**resolved)
+
+        valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in resolved.items() if k in valid_keys}
+        return cls(**filtered)
 
     def save(self) -> None:
         config_dir = self.config_dir()
@@ -82,6 +93,10 @@ class VoiceDevConfig:
             "wake_word": self.wake_word,
             "noise_reduction": self.noise_reduction,
             "session_logging": self.session_logging,
+            "audio_feedback": self.audio_feedback,
+            "confirm_before_send": self.confirm_before_send,
+            "confirmation_timeout_s": self.confirmation_timeout_s,
+            "show_confidence": self.show_confidence,
         }
 
         with open(self.config_path(), "w") as f:
@@ -93,7 +108,7 @@ class VoiceDevConfig:
 
 
 def _resolve_auto_backend(merged: dict) -> dict:
-    if merged["stt_backend"] == "auto":
+    if merged.get("stt_backend") == "auto":
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if groq_key.strip():
             merged["stt_backend"] = "groq_whisper"
@@ -102,12 +117,5 @@ def _resolve_auto_backend(merged: dict) -> dict:
             if api_key.strip():
                 merged["stt_backend"] = "whisper_api"
             else:
-                merged["stt_backend"] = "faster_whisper"
-        # Add a check for whisper_api availability
-        if merged["stt_backend"] == "whisper_api":
-            try:
-                import openai
-                openai.OpenAI()
-            except Exception:
                 merged["stt_backend"] = "faster_whisper"
     return merged
