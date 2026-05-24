@@ -13,7 +13,7 @@ from typing import Optional
 import numpy as np
 
 from voicedev.config import VoiceDevConfig
-from voicedev.audio.capture import AudioCapture
+from voicedev.audio.capture import AudioCapture, SAMPLE_RATE
 from voicedev.audio.vad import VoiceActivityDetector
 from voicedev.audio.noise import reduce_noise
 from voicedev.audio.feedback import AudioFeedback
@@ -34,13 +34,17 @@ STT_COST_PER_MIN = {
     "faster_whisper": 0.0,
 }
 
+MODE_PTT = "PTT"
+MODE_HANDS_FREE = "HandsFree"
+MODE_CONTINUOUS = "Continuous"
+
 
 class VoiceDev:
     def __init__(self, config: VoiceDevConfig):
         self.config = config
         self._running = False
         self._paused = False
-        self._mode = "PTT"
+        self._mode = MODE_PTT
         self._lock = threading.Lock()
 
         self._tui = TUIDisplay()
@@ -52,6 +56,10 @@ class VoiceDev:
         self._stt: Optional[STTBackend] = None
         self._agent: Optional[AgentBackend] = None
         self._logger: Optional[SessionLogger] = None
+
+        self._filler_set = {w.lower().strip() for w in config.filler_words}
+
+    # ── STT / Agent init ─────────────────────────────────────
 
     def _init_stt(self) -> STTBackend:
         if self.config.stt_backend == "groq_whisper":
@@ -93,10 +101,10 @@ class VoiceDev:
         return backend
 
     def _on_agent_restart(self, attempt: int) -> None:
-        self._tui.console.print(
-            f"[bold yellow]Aider restarting (attempt {attempt})...[/bold yellow]"
-        )
+        self._tui.console.print(f"[bold yellow]Aider restarting (attempt {attempt})...[/bold yellow]")
         self._feedback.play("error")
+
+    # ── Lifecycle ─────────────────────────────────────────────
 
     def start(self) -> None:
         self.config.ensure_dirs()
@@ -116,21 +124,29 @@ class VoiceDev:
             self._logger = SessionLogger(self.config.sessions_dir())
             self._logger.set_stt_backend(self._stt.name())
 
-        self._tui.print_startup_banner(self.config)
+        self._tui.print_startup_banner(self.config, self._mode)
         self._tui.print_status()
 
         self._running = True
         signal.signal(signal.SIGINT, self._handle_signal)
 
         try:
-            if self._mode == "PTT":
-                self._run_ptt_loop()
-            else:
-                self._run_continuous_loop()
+            self._dispatch_loop()
         except KeyboardInterrupt:
             pass
         finally:
             self.shutdown()
+
+    def _dispatch_loop(self) -> None:
+        while self._running:
+            if self._mode == MODE_PTT:
+                self._run_ptt_loop()
+            elif self._mode == MODE_HANDS_FREE:
+                self._run_hands_free_loop()
+            elif self._mode == MODE_CONTINUOUS:
+                self._run_continuous_loop()
+            else:
+                self._run_ptt_loop()
 
     def _handle_signal(self, signum, frame):
         self._running = False
@@ -145,8 +161,41 @@ class VoiceDev:
         self._feedback.play("stop")
         self._tui.console.print("[bold cyan]VoiceDev stopped. Session log saved.[/bold cyan]")
 
-    def _process_audio(self, audio: np.ndarray) -> None:
-        from voicedev.audio.capture import SAMPLE_RATE
+    # ── Smart filtering ───────────────────────────────────────
+
+    def _is_garbage(
+        self,
+        audio: np.ndarray,
+        result: TranscriptionResult,
+        strict: bool = True,
+    ) -> Optional[str]:
+        """Return a rejection reason string, or None if the audio is good."""
+        text = (result.text or "").strip()
+        if not text:
+            return "empty transcription"
+
+        if not any(ch.isalnum() for ch in text):
+            return "no words detected"
+
+        if result.has_confidence and result.confidence < self.config.min_confidence:
+            return f"low confidence ({result.confidence_pct} < {int(self.config.min_confidence*100)}%)"
+
+        if not strict:
+            return None
+
+        audio_duration = len(audio) / SAMPLE_RATE
+        if audio_duration < self.config.min_audio_duration_s:
+            return f"too short ({audio_duration:.1f}s < {self.config.min_audio_duration_s}s)"
+
+        text_lower = text.lower().strip().rstrip(".!?,;:")
+        if text_lower in self._filler_set:
+            return f"filler word ('{text_lower}')"
+
+        return None
+
+    # ── Audio processing pipeline ─────────────────────────────
+
+    def _process_audio(self, audio: np.ndarray, apply_smart_filter: bool = False) -> None:
         audio_duration = len(audio) / SAMPLE_RATE
 
         if self.config.noise_reduction:
@@ -170,12 +219,14 @@ class VoiceDev:
         text = result.text.strip() if result.text else ""
         confidence = result.confidence
 
-        if not text:
+        reason = self._is_garbage(audio, result, strict=apply_smart_filter)
+        if reason:
+            self._tui.console.print(f"[dim]Filtered: {reason} — '{text}'[/dim]")
             self._tui.set_state(TUIDisplay.STATE_IDLE)
             self._tui.print_status()
             return
 
-        if self._mode == "Continuous":
+        if self._mode == MODE_CONTINUOUS and self.config.require_wake_word:
             if not self._wake.detect_text(text):
                 self._tui.console.print(f"[dim]Wake word required. Heard: '{text}'[/dim]")
                 self._tui.set_state(TUIDisplay.STATE_IDLE)
@@ -189,7 +240,6 @@ class VoiceDev:
                 self._tui.print_status()
                 return
 
-        # Confirmation flow
         if self.config.confirm_before_send:
             confirmed = self._confirm_transcription(text)
             if not confirmed:
@@ -234,15 +284,16 @@ class VoiceDev:
             self._feedback.play("success")
             self._agent.send_query(text)
 
-        if self._mode == "Continuous":
+        if self._mode == MODE_CONTINUOUS:
             self._wake.disarm()
 
         time.sleep(0.3)
         self._tui.set_state(TUIDisplay.STATE_IDLE)
         self._tui.print_status()
 
+    # ── Confirmation ──────────────────────────────────────────
+
     def _confirm_transcription(self, text: str) -> bool:
-        """Show transcription and wait for voice confirmation or timeout."""
         self._tui.set_state(TUIDisplay.STATE_CONFIRMING)
         self._tui.print_confirmation_prompt(text, self.config.confirmation_timeout_s)
 
@@ -251,10 +302,10 @@ class VoiceDev:
             if not self._running:
                 return False
 
-            if self._mode == "PTT":
+            if self._mode == MODE_PTT:
                 import keyboard
-                if keyboard.is_pressed("space"):
-                    quick_audio = self._capture.record_while_key_held("space")
+                if keyboard.is_pressed(self.config.ptt_key):
+                    quick_audio = self._capture.record_while_key_held(self.config.ptt_key)
                     if len(quick_audio) > 0:
                         try:
                             quick_result = self._stt.transcribe(quick_audio)
@@ -270,6 +321,8 @@ class VoiceDev:
         self._tui.print_auto_sent()
         return True
 
+    # ── Command handling ──────────────────────────────────────
+
     def _handle_command(self, action: str) -> None:
         if action == "pause":
             self._paused = True
@@ -278,16 +331,11 @@ class VoiceDev:
             self._paused = False
             self._tui.console.print("[green]Resumed.[/green]")
         elif action == "mode_continuous":
-            self._mode = "Continuous"
-            self._tui.set_mode("Continuous")
-            self._tui.console.print("[green]Switched to Continuous (hands-free) mode.[/green]")
-            self._tui.console.print(f"[dim]Say '{self.config.wake_word}' before each command.[/dim]")
-            if not self._capture.is_streaming:
-                self._capture.start_stream()
+            self._switch_mode(MODE_CONTINUOUS)
+        elif action == "mode_hands_free":
+            self._switch_mode(MODE_HANDS_FREE)
         elif action == "mode_manual":
-            self._mode = "PTT"
-            self._tui.set_mode("PTT")
-            self._tui.console.print("[green]Switched to PTT (push-to-talk) mode.[/green]")
+            self._switch_mode(MODE_PTT)
         elif action == "shutdown":
             self._running = False
         elif action in ("Y", "y", "N", "n"):
@@ -305,13 +353,36 @@ class VoiceDev:
         else:
             self._agent.send_command(action)
 
+    def _switch_mode(self, new_mode: str) -> None:
+        old_mode = self._mode
+        self._mode = new_mode
+        self._tui.set_mode(new_mode)
+
+        if new_mode == MODE_PTT:
+            self._tui.console.print("[green]Switched to PTT mode. Hold SPACE to record, release to send.[/green]")
+            if self._capture.is_streaming:
+                self._capture.stop_stream()
+        elif new_mode == MODE_HANDS_FREE:
+            self._tui.console.print("[green]Switched to Hands-Free mode. Just speak — no button, no wake word.[/green]")
+            if not self._capture.is_streaming:
+                self._capture.start_stream()
+            self._capture.drain_queue()
+        elif new_mode == MODE_CONTINUOUS:
+            self._tui.console.print("[green]Switched to Continuous mode (wake word required).[/green]")
+            self._tui.console.print(f"[dim]Say '{self.config.wake_word}' before each command.[/dim]")
+            if not self._capture.is_streaming:
+                self._capture.start_stream()
+            self._capture.drain_queue()
+
+    # ── PTT loop (hold-to-record, most reliable default) ──────
+
     def _run_ptt_loop(self) -> None:
         import keyboard
 
         self._tui.console.print("[dim]PTT mode: Hold SPACE to record. Release to send.[/dim]\n")
 
-        while self._running:
-            if keyboard.is_pressed("space"):
+        while self._running and self._mode == MODE_PTT:
+            if keyboard.is_pressed(self.config.ptt_key):
                 if self._paused:
                     time.sleep(0.1)
                     continue
@@ -320,29 +391,34 @@ class VoiceDev:
                 self._tui.set_state(TUIDisplay.STATE_RECORDING)
                 self._tui.print_status()
 
-                audio = self._capture.record_while_key_held("space")
+                audio = self._capture.record_while_key_held(self.config.ptt_key)
 
                 if len(audio) > 0:
-                    self._process_audio(audio)
+                    self._process_audio(audio, apply_smart_filter=False)
                 else:
                     self._tui.set_state(TUIDisplay.STATE_IDLE)
                     self._tui.print_status()
             else:
                 time.sleep(0.05)
 
-    def _run_continuous_loop(self) -> None:
-        self._tui.console.print("[dim]Continuous mode: Speak naturally. VAD will detect speech.[/dim]")
-        self._tui.console.print(f"[dim]Say '{self.config.wake_word}' before each command.[/dim]\n")
+    # ── Hands-Free loop (VAD, no wake word, smart filter) ─────
 
-        self._capture.start_stream()
+    def _run_hands_free_loop(self) -> None:
+        self._tui.console.print("[dim]Hands-Free mode: Just speak naturally. Smart filter removes noise.[/dim]")
+        self._tui.console.print("[dim]Say 'stop listening' to pause, 'switch to manual' for PTT.[/dim]\n")
 
-        while self._running:
+        if not self._capture.is_streaming:
+            self._capture.start_stream()
+        self._capture.drain_queue()
+
+        while self._running and self._mode == MODE_HANDS_FREE:
             if self._paused:
                 time.sleep(0.1)
-                while self._paused and self._running:
+                while self._paused and self._running and self._mode == MODE_HANDS_FREE:
                     time.sleep(0.1)
-                if not self._running:
+                if not self._running or self._mode != MODE_HANDS_FREE:
                     break
+                self._capture.drain_queue()
 
             self._tui.set_state(TUIDisplay.STATE_LISTENING)
             self._tui.print_status()
@@ -354,10 +430,45 @@ class VoiceDev:
 
             if audio is not None and len(audio) > 0:
                 self._feedback.play("start")
-                self._process_audio(audio)
+                self._process_audio(audio, apply_smart_filter=True)
 
             time.sleep(0.05)
 
+    # ── Continuous loop (VAD + wake word) ─────────────────────
+
+    def _run_continuous_loop(self) -> None:
+        self._tui.console.print("[dim]Continuous mode: Speak naturally. VAD will detect speech.[/dim]")
+        self._tui.console.print(f"[dim]Say '{self.config.wake_word}' before each command.[/dim]\n")
+
+        if not self._capture.is_streaming:
+            self._capture.start_stream()
+        self._capture.drain_queue()
+
+        while self._running and self._mode == MODE_CONTINUOUS:
+            if self._paused:
+                time.sleep(0.1)
+                while self._paused and self._running and self._mode == MODE_CONTINUOUS:
+                    time.sleep(0.1)
+                if not self._running or self._mode != MODE_CONTINUOUS:
+                    break
+                self._capture.drain_queue()
+
+            self._tui.set_state(TUIDisplay.STATE_LISTENING)
+            self._tui.print_status()
+
+            audio = self._vad.detect_speech_segment(
+                frame_source=self._capture.read_frame,
+                silence_threshold_ms=self.config.silence_threshold_ms,
+            )
+
+            if audio is not None and len(audio) > 0:
+                self._feedback.play("start")
+                self._process_audio(audio, apply_smart_filter=True)
+
+            time.sleep(0.05)
+
+
+# ── CLI ───────────────────────────────────────────────────────
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -377,9 +488,9 @@ def parse_args():
     )
     parser.add_argument(
         "--mode",
-        choices=["ptt", "continuous"],
+        choices=["ptt", "hands_free", "continuous"],
         default=None,
-        help="Input mode: push-to-talk or continuous VAD",
+        help="Input mode: ptt (hold space), hands_free (zero-touch), continuous (wake word)",
     )
     parser.add_argument(
         "--no-noise-reduction",
@@ -457,9 +568,13 @@ def main() -> None:
 
     app = VoiceDev(config)
 
-    if args.mode == "continuous":
-        app._mode = "Continuous"
-        app._tui.set_mode("Continuous")
+    if args.mode == "hands_free":
+        app._mode = MODE_HANDS_FREE
+        app._tui.set_mode(MODE_HANDS_FREE)
+    elif args.mode == "continuous":
+        app._mode = MODE_CONTINUOUS
+        app._tui.set_mode(MODE_CONTINUOUS)
+        config.require_wake_word = True
 
     app.start()
 

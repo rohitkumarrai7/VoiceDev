@@ -51,6 +51,14 @@ class AudioCapture:
                 self._stream.close()
                 self._stream = None
 
+    def drain_queue(self) -> None:
+        """Discard any buffered frames so next read_frame starts fresh."""
+        while not self._frame_queue.empty():
+            try:
+                self._frame_queue.get_nowait()
+            except queue.Empty:
+                break
+
     def read_frame(self, timeout: float = 1.0) -> Optional[np.ndarray]:
         try:
             return self._frame_queue.get(timeout=timeout)

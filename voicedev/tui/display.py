@@ -118,31 +118,38 @@ class TUIDisplay:
     def print_status(self) -> None:
         self._console.print(self.build_panel())
 
-    def print_startup_banner(self, config) -> None:
+    def print_startup_banner(self, config, mode: str = "PTT") -> None:
         self._console.print()
         self._console.rule("[bold cyan]VoiceDev — Speak. Code. Ship.[/bold cyan]")
         self._console.print()
 
         table = Table(show_header=False, box=None, padding=(0, 2))
-        table.add_column(style="dim", width=16)
+        table.add_column(style="dim", width=18)
         table.add_column()
         table.add_row("STT Backend", f"[yellow]{self._stt_backend}[/yellow]")
-        table.add_row("Mode", f"[green]{self._mode}[/green]")
+        table.add_row("Mode", f"[green]{mode}[/green]")
         table.add_row("VAD Level", str(config.vad_aggressiveness))
-        table.add_row("Silence", f"{config.silence_threshold_ms}ms")
+        table.add_row("Silence Threshold", f"{config.silence_threshold_ms}ms")
         table.add_row("Noise Reduce", str(config.noise_reduction))
         table.add_row("Audio Feedback", str(config.audio_feedback))
         table.add_row("Confidence", str(config.show_confidence))
-        table.add_row("Wake Word", f'"{config.wake_word}" ({self._wake_backend})')
+        table.add_row("Smart Filter", f"min {config.min_audio_duration_s}s / {int(config.min_confidence*100)}% conf")
+        if config.require_wake_word:
+            table.add_row("Wake Word", f'"{config.wake_word}" ({self._wake_backend})')
         table.add_row("Agent", config.agent)
         self._console.print(table)
 
         self._console.print()
         self._console.print("  [bold]Controls:[/bold]")
-        self._console.print("    [dim]PTT:[/dim]   Hold SPACE to record, release to send")
-        self._console.print("    [dim]Voice:[/dim] Say 'switch to continuous' for hands-free")
-        self._console.print("    [dim]Help:[/dim]  Say 'help me' for all voice commands")
-        self._console.print("    [dim]Exit:[/dim]  Say 'exit' or press Ctrl+C")
+        if mode == "PTT":
+            self._console.print("    [dim]PTT:[/dim]    Hold SPACE to record, release to send")
+        elif mode == "HandsFree":
+            self._console.print("    [dim]Voice:[/dim]  Just speak — no button, no wake word needed")
+        else:
+            self._console.print("    [dim]Voice:[/dim]  Say wake word, then your command")
+        self._console.print("    [dim]Modes:[/dim]  Say 'go hands free' / 'switch to manual' / 'switch to continuous'")
+        self._console.print("    [dim]Help:[/dim]   Say 'help me' for all voice commands")
+        self._console.print("    [dim]Exit:[/dim]   Say 'exit' or press Ctrl+C")
         self._console.print()
         self._console.rule()
 
