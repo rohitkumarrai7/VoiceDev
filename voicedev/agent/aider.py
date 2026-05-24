@@ -99,12 +99,18 @@ class AiderBackend(AgentBackend):
                 base.append(flag)
 
         minimax_key = os.environ.get("MINIMAX_API_KEY", "")
-        if minimax_key:
+        explicit_minimax_model = any("minimax" in arg.lower() for arg in self._extra_args)
+        minimax_env_enabled = os.environ.get("VOICEDEV_USE_MINIMAX", "").lower() in {
+            "1", "true", "yes", "on",
+        }
+        use_minimax = bool(minimax_key and (explicit_minimax_model or minimax_env_enabled))
+
+        if use_minimax:
             base.extend(["--openai-api-key", minimax_key])
             base.extend(["--openai-api-base", "https://api.minimaxi.chat/v1"])
 
         model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
-        if not model_in_extra and minimax_key:
+        if not model_in_extra and use_minimax:
             base.extend(["--model", "minimax/minimax-m2.5"])
 
         base.extend(self._extra_args)
@@ -219,10 +225,10 @@ class AiderBackend(AgentBackend):
         except Exception:
             pass
         finally:
-            if self._auto_restart and self._attempt_restart():
-                return
-            self._running = False
-            print("[VoiceDev] Aider process exited.")
+            restarted = self._auto_restart and self._attempt_restart()
+            if not restarted:
+                self._running = False
+                print("[VoiceDev] Aider process exited.")
 
     def _start_with_subprocess(self, aider_path: str) -> None:
         cmd = self._build_cmd(aider_path)
@@ -267,10 +273,10 @@ class AiderBackend(AgentBackend):
         except Exception:
             pass
         finally:
-            if self._auto_restart and self._attempt_restart():
-                return
-            self._running = False
-            print("[VoiceDev] Aider process exited.")
+            restarted = self._auto_restart and self._attempt_restart()
+            if not restarted:
+                self._running = False
+                print("[VoiceDev] Aider process exited.")
 
     def _attempt_restart(self) -> bool:
         uptime = time.time() - self._last_start_time
