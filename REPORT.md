@@ -68,7 +68,35 @@ For `faster-whisper` (local), the same `avg_logprob` is available directly on se
 
 ---
 
-## 5. VAD Design
+## 5. Three Input Modes & Smart Filter (1+3 Architecture)
+
+A critical v0.3 enhancement: VoiceDev now offers **three input modes** that cover the full spectrum from button-controlled to fully autonomous, plus a **smart audio filter** that is the key enabler for hands-free use.
+
+### The Three Modes
+
+**PTT (Push-to-Talk, Default):** The user holds `Space` while speaking and releases it to send. I tested a tap-to-toggle variant, but in real terminal use it was less reliable: short accidental taps could open a recording window and produce low-confidence garbage like punctuation-only text. The final default keeps hold-to-record because it is more predictable, while still adding a guard that rejects low-confidence or non-word transcriptions before they reach Aider.
+
+**Hands-Free:** No button press, no wake word. VAD continuously listens for speech and pipes every detected segment through the smart filter and STT. This is the zero-friction mode for focused coding sessions where the developer's hands are on the keyboard and they want to issue voice commands without any physical interaction.
+
+**Continuous:** Same as Hands-Free but with a mandatory wake word (default: "hey dev"). This is designed for shared offices, noisy environments, or situations where the user wants explicit activation to prevent background speech from reaching the agent.
+
+### The Smart Filter
+
+The smart filter is what makes Hands-Free and Continuous modes practical. Without it, the VAD would pick up coughs, keyboard sounds, sighs, and meaningless filler words, sending garbage to the STT and then to the agent. The filter runs three sequential checks:
+
+1. **Duration gate:** Audio shorter than `min_audio_duration_s` (default 0.4s) is rejected. This catches keyboard clicks, coughs, and brief noises that VAD occasionally classifies as speech.
+
+2. **Confidence gate:** If the STT returns a confidence score below `min_confidence` (default 35%), the transcription is rejected. This catches cases where the STT tried to decode background noise and produced hallucinated text with low confidence.
+
+3. **Filler word gate:** If the transcription is a single filler word ("um", "uh", "hmm", "like", "you know", "okay", "thank you", etc.), it's rejected. These are common involuntary utterances that have no meaningful content for the agent.
+
+All thresholds are user-configurable via `config.yaml`. The filter logs rejections with reasons (`[dim]Filtered: too short (0.2s < 0.4s) — ''[/dim]`) so the user can tune thresholds if they're too aggressive or too permissive.
+
+**Why not gate at the VAD level?** VAD operates on raw audio without semantic understanding. A cough and a short command like "yes" look identical to VAD. The smart filter operates after STT, where we have text, confidence, and duration — much richer signals for filtering.
+
+---
+
+## 6. VAD Design
 
 Voice Activity Detection is the single most important UX feature in VoiceDev. Without it, the user must press a button to start and stop every recording — which defeats the hands-free goal and makes the experience feel like a walkie-talkie rather than a natural conversation.
 
@@ -82,7 +110,7 @@ I chose **webrtcvad** (Google's WebRTC VAD, Python bindings via `webrtcvad-wheel
 
 ---
 
-## 6. Wake Word Detection
+## 7. Wake Word Detection
 
 Continuous mode presents a unique challenge: how to distinguish intentional commands from background conversation, TV audio, or thinking out loud. A wake word mechanism is essential.
 
@@ -96,7 +124,7 @@ Continuous mode presents a unique challenge: how to distinguish intentional comm
 
 ---
 
-## 7. Audio Feedback
+## 8. Audio Feedback
 
 A critical UX insight: in a hands-free voice interface, the user needs non-visual confirmation that the system is responding. If you're looking at the agent's output while speaking, you can't also watch the status panel.
 
@@ -117,7 +145,7 @@ Tones are generated programmatically via `numpy` sine waves with fade-in/fade-ou
 
 ---
 
-## 8. Confirmation Mode
+## 9. Confirmation Mode
 
 An optional safety net for misheard transcriptions. When enabled (`--confirm` or config), VoiceDev introduces a brief review window between transcription and sending:
 
@@ -133,7 +161,7 @@ An optional safety net for misheard transcriptions. When enabled (`--confirm` or
 
 ---
 
-## 9. Voice Meta-Commands
+## 10. Voice Meta-Commands
 
 A key design insight: not all spoken text should reach the agent. Some utterances control the tool itself — pausing listening, switching modes, triggering shortcuts. These "meta-commands" are intercepted by VoiceDev's command router before reaching the agent.
 
@@ -151,7 +179,7 @@ The command set grew from 12 commands in v0.1 to **30+ commands in v0.2**, organ
 
 ---
 
-## 10. Architecture Trade-offs
+## 11. Architecture Trade-offs
 
 ### stdin injection vs. PTY wrapping
 
@@ -179,7 +207,7 @@ In v0.1, the Aider backend hardcoded a default model (`minimax/minimax-m2.5`). I
 
 ---
 
-## 11. Limitations
+## 12. Limitations
 
 **Simultaneous speech and reading.** If the user speaks while reading Aider's output, they may miss content on screen. This is inherent to a voice-input / visual-output design. A potential mitigation (text-to-speech for agent responses) was explicitly out of scope per the problem statement.
 
@@ -193,7 +221,7 @@ In v0.1, the Aider backend hardcoded a default model (`minimax/minimax-m2.5`). I
 
 ---
 
-## 12. Latency Benchmarks
+## 13. Latency Benchmarks
 
 Measured on a Windows 11 machine (AMD Ryzen 7, 32GB RAM) and a MacBook Pro M2, averaged over 20 utterances per backend:
 
@@ -213,7 +241,7 @@ The total PTT cycle — from releasing the spacebar to the text appearing in Aid
 
 ---
 
-## 13. Cost Analysis
+## 14. Cost Analysis
 
 ### Per-user cost (Groq Whisper — recommended)
 
@@ -243,7 +271,7 @@ The total PTT cycle — from releasing the spacebar to the text appearing in Aid
 
 ---
 
-## 14. External Services Used
+## 15. External Services Used
 
 | Service | Purpose | Cost | Confidence Support |
 |---|---|---|---|

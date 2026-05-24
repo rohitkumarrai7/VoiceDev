@@ -14,9 +14,9 @@ VoiceDev is a voice-first interface layer for terminal-based AI coding agents. Y
 
 ## Features
 
-- **Voice Activity Detection (VAD):** Automatic speech onset/offset detection via webrtcvad — no button presses needed in continuous mode
-- **Push-to-Talk (PTT) Mode:** Hold `Space` to record, release to send
-- **Continuous Mode:** Fully hands-free via VAD with configurable wake word detection
+- **Three Input Modes:** PTT (reliable hold-to-record), Hands-Free (zero-touch, smart filter), Continuous (wake word + VAD)
+- **Voice Activity Detection (VAD):** Automatic speech onset/offset detection via webrtcvad across all modes
+- **Smart Audio Filter:** Rejects short clips (<0.4s), low confidence (<35%), and filler words ("um", "uh", etc.) in hands-free/continuous modes
 - **Wake Word Detection:** On-device ML-based wake word via [openwakeword](https://github.com/dscripka/openWakeWord) (optional), with substring fallback
 - **30+ Voice Meta-Commands:** Control VoiceDev and Aider with natural speech — file management, mode switching, git operations, and more
 - **Three STT Backends:** Groq Whisper (fastest, free), OpenAI Whisper API (cloud), faster-whisper (local, offline)
@@ -104,7 +104,13 @@ voicedev --stt whisper_api
 voicedev --stt faster_whisper
 ```
 
-### Start in continuous (hands-free) mode
+### Start in hands-free mode (recommended — zero touch, smart filter)
+
+```bash
+voicedev --mode hands_free
+```
+
+### Start in continuous mode (wake word required)
 
 ```bash
 voicedev --mode continuous
@@ -146,13 +152,23 @@ voicedev -- --model gpt-4o --no-auto-commits
 
 ### PTT Mode (Default)
 
-Hold `Space` to record your voice. Release to transcribe and send to Aider. A beep tone confirms recording start and end.
+Hold `Space` to record your voice. Release to transcribe and send to Aider. This remains the default because it is the most predictable mode for real coding sessions. Low-confidence or punctuation-only garbage such as `". ."` is filtered before it reaches the agent.
+
+### Hands-Free Mode
+
+Start with `--mode hands_free` or say **"go hands free"**. VAD continuously listens for speech and auto-transcribes. **No button press, no wake word** — just speak. A **smart filter** automatically rejects:
+
+- Audio shorter than 0.4s (keyboard clicks, coughs)
+- Transcriptions below 35% confidence (background noise that STT tried to decode)
+- Filler words ("um", "uh", "hmm", "like", "you know", "thank you")
+
+This keeps the agent from receiving garbage input while you work hands-free.
 
 ### Continuous Mode
 
-Say **"switch to continuous"** or start with `--mode continuous`. VAD detects when you start and stop speaking. Say your wake word (default: **"hey dev"**) before each command for fully hands-free operation.
+Say **"switch to continuous"** or start with `--mode continuous`. Same as Hands-Free but **requires the wake word** (default: "hey dev") before each command. Useful in noisy environments or shared spaces where you want intentional activation only.
 
-Switch back with **"switch to manual"**.
+Switch between modes anytime: **"switch to manual"**, **"go hands free"**, **"switch to continuous"**.
 
 ---
 
@@ -166,7 +182,8 @@ These are intercepted before reaching Aider and control VoiceDev or trigger agen
 |---|---|
 | `"stop listening"` | Pause voice recording |
 | `"start listening"` | Resume voice recording |
-| `"switch to continuous"` | Enable hands-free VAD mode |
+| `"switch to continuous"` | VAD + wake word mode |
+| `"go hands free"` | VAD hands-free (no wake word) |
 | `"switch to manual"` | Switch back to PTT mode |
 
 ### Aider Commands
@@ -298,12 +315,20 @@ ptt_key: space                      # Key for push-to-talk
 agent: aider                        # Target agent
 aider_args: []                      # Extra args passed to aider on launch
 wake_word: hey dev                  # Wake word for continuous mode
+require_wake_word: false            # Require wake word (continuous mode only)
 noise_reduction: true               # Enable noise cancellation
 session_logging: true               # Save session transcripts
 audio_feedback: true                # Play beep sounds on state changes
 confirm_before_send: false          # Review transcription before sending
 confirmation_timeout_s: 2.0         # Auto-send timeout (if confirm enabled)
 show_confidence: true               # Display STT confidence scores
+min_audio_duration_s: 0.4           # Smart filter: reject audio shorter than this
+min_confidence: 0.35                # Smart filter: reject below this confidence
+filler_words:                       # Smart filter: reject these filler words
+  - um
+  - uh
+  - hmm
+  # ... see config.example.yaml for full list
 ```
 
 ---
@@ -367,7 +392,10 @@ voicedev/
 │   ├── test_commands.py
 │   ├── test_stt_mock.py
 │   ├── test_config.py
-│   └── test_noise.py
+│   ├── test_noise.py
+│   ├── test_feedback.py
+│   ├── test_wakeword.py
+│   └── test_smart_filter.py
 ├── README.md
 ├── REPORT.md
 ├── LICENSE                      # MIT

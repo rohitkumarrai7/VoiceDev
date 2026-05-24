@@ -14,7 +14,7 @@ from voicedev.audio.feedback import AudioFeedback
 from voicedev.audio.wakeword import WakeWordDetector
 
 
-def test_aider_found():
+def check_aider_found():
     print("=" * 60)
     print("TEST 1: Aider executable resolution")
     print("=" * 60)
@@ -28,7 +28,7 @@ def test_aider_found():
         return False
 
 
-def test_aider_starts():
+def check_aider_starts():
     print()
     print("=" * 60)
     print("TEST 2: Aider process starts and accepts stdin")
@@ -64,7 +64,7 @@ def test_aider_starts():
         time.sleep(1.0)
 
 
-def test_command_router():
+def check_command_router():
     print()
     print("=" * 60)
     print("TEST 3: Command router (30+ commands)")
@@ -114,7 +114,7 @@ def test_command_router():
     return all_pass
 
 
-def test_prompt_detection():
+def check_prompt_detection():
     print()
     print("=" * 60)
     print("TEST 4: Prompt pattern detection")
@@ -144,7 +144,7 @@ def test_prompt_detection():
     return all_pass
 
 
-def test_transcription_result():
+def check_transcription_result():
     print()
     print("=" * 60)
     print("TEST 5: TranscriptionResult confidence scoring")
@@ -163,7 +163,7 @@ def test_transcription_result():
     return True
 
 
-def test_audio_feedback():
+def check_audio_feedback():
     print()
     print("=" * 60)
     print("TEST 6: Audio feedback tone generation")
@@ -179,7 +179,7 @@ def test_audio_feedback():
     return True
 
 
-def test_wake_word():
+def check_wake_word():
     print()
     print("=" * 60)
     print("TEST 7: Wake word detection")
@@ -201,6 +201,34 @@ def test_wake_word():
     return True
 
 
+def test_aider_found():
+    assert check_aider_found()
+
+
+def test_aider_starts():
+    assert check_aider_starts()
+
+
+def test_command_router():
+    assert check_command_router()
+
+
+def test_prompt_detection():
+    assert check_prompt_detection()
+
+
+def test_transcription_result():
+    assert check_transcription_result()
+
+
+def test_audio_feedback():
+    assert check_audio_feedback()
+
+
+def test_wake_word():
+    assert check_wake_word()
+
+
 def main():
     print()
     print("=" * 60)
@@ -208,13 +236,13 @@ def main():
     print("=" * 60)
 
     results = []
-    results.append(("Aider Found", test_aider_found()))
-    results.append(("Aider Starts", test_aider_starts()))
-    results.append(("Command Router (30+)", test_command_router()))
-    results.append(("Prompt Detection", test_prompt_detection()))
-    results.append(("Confidence Scoring", test_transcription_result()))
-    results.append(("Audio Feedback", test_audio_feedback()))
-    results.append(("Wake Word", test_wake_word()))
+    results.append(("Aider Found", check_aider_found()))
+    results.append(("Aider Starts", check_aider_starts()))
+    results.append(("Command Router (30+)", check_command_router()))
+    results.append(("Prompt Detection", check_prompt_detection()))
+    results.append(("Confidence Scoring", check_transcription_result()))
+    results.append(("Audio Feedback", check_audio_feedback()))
+    results.append(("Wake Word", check_wake_word()))
 
     print()
     print("=" * 60)
