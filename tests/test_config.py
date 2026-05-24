@@ -1,6 +1,5 @@
 import pytest
 from pathlib import Path
-import tempfile
 
 from voicedev.config import VoiceDevConfig
 
@@ -16,6 +15,11 @@ class TestConfig:
         assert config.show_confidence is True
         assert config.confirm_before_send is False
         assert config.confirmation_timeout_s == 2.0
+        assert config.require_wake_word is False
+        assert config.min_audio_duration_s == 0.4
+        assert config.min_confidence == 0.35
+        assert isinstance(config.filler_words, list)
+        assert "um" in config.filler_words
 
     def test_config_dir(self):
         assert VoiceDevConfig.config_dir() == Path.home() / ".voicedev"
@@ -39,6 +43,16 @@ class TestConfig:
         assert config.confirm_before_send is True
         assert config.confirmation_timeout_s == 3.5
 
+    def test_load_smart_filter_overrides(self):
+        config = VoiceDevConfig.load({
+            "min_audio_duration_s": 0.8,
+            "min_confidence": 0.5,
+            "filler_words": ["um", "uh"],
+        })
+        assert config.min_audio_duration_s == 0.8
+        assert config.min_confidence == 0.5
+        assert config.filler_words == ["um", "uh"]
+
     def test_load_ignores_unknown_keys(self):
         config = VoiceDevConfig.load({"unknown_future_key": "value"})
         assert not hasattr(config, "unknown_future_key")
@@ -59,6 +73,8 @@ class TestConfig:
             assert loaded.vad_aggressiveness == config.vad_aggressiveness
             assert loaded.audio_feedback == config.audio_feedback
             assert loaded.show_confidence == config.show_confidence
+            assert loaded.min_audio_duration_s == config.min_audio_duration_s
+            assert loaded.min_confidence == config.min_confidence
 
     def test_ensure_dirs(self, tmp_path):
         config = VoiceDevConfig()

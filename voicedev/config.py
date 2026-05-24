@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 import yaml
 
@@ -17,12 +17,20 @@ DEFAULT_CONFIG = {
     "agent": "aider",
     "aider_args": [],
     "wake_word": "hey dev",
+    "require_wake_word": False,
     "noise_reduction": True,
     "session_logging": True,
     "audio_feedback": True,
     "confirm_before_send": False,
     "confirmation_timeout_s": 2.0,
     "show_confidence": True,
+    "min_audio_duration_s": 0.4,
+    "min_confidence": 0.35,
+    "filler_words": [
+        "um", "uh", "hmm", "hm", "ah", "oh", "er", "like",
+        "you know", "so", "okay", "right", "well",
+        "thank you", "thanks",
+    ],
 }
 
 
@@ -38,12 +46,16 @@ class VoiceDevConfig:
     agent: str = "aider"
     aider_args: list = field(default_factory=list)
     wake_word: str = "hey dev"
+    require_wake_word: bool = False
     noise_reduction: bool = True
     session_logging: bool = True
     audio_feedback: bool = True
     confirm_before_send: bool = False
     confirmation_timeout_s: float = 2.0
     show_confidence: bool = True
+    min_audio_duration_s: float = 0.4
+    min_confidence: float = 0.35
+    filler_words: list = field(default_factory=lambda: list(DEFAULT_CONFIG["filler_words"]))
 
     @classmethod
     def config_dir(cls) -> Path:
@@ -91,12 +103,16 @@ class VoiceDevConfig:
             "agent": self.agent,
             "aider_args": self.aider_args,
             "wake_word": self.wake_word,
+            "require_wake_word": self.require_wake_word,
             "noise_reduction": self.noise_reduction,
             "session_logging": self.session_logging,
             "audio_feedback": self.audio_feedback,
             "confirm_before_send": self.confirm_before_send,
             "confirmation_timeout_s": self.confirmation_timeout_s,
             "show_confidence": self.show_confidence,
+            "min_audio_duration_s": self.min_audio_duration_s,
+            "min_confidence": self.min_confidence,
+            "filler_words": self.filler_words,
         }
 
         with open(self.config_path(), "w") as f:

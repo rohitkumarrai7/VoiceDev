@@ -68,6 +68,16 @@ class TestCommandRouter:
         assert result is not None
         assert result[1] == "shutdown"
 
+    def test_exact_match_hands_free(self):
+        result = self.router.route("switch to hands free")
+        assert result is not None
+        assert result[1] == "mode_hands_free"
+
+    def test_exact_match_go_hands_free(self):
+        result = self.router.route("go hands free")
+        assert result is not None
+        assert result[1] == "mode_hands_free"
+
     def test_exact_match_commit_changes(self):
         result = self.router.route("commit changes")
         assert result is not None

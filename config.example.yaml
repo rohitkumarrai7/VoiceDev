@@ -11,9 +11,26 @@ ptt_key: space                      # Key for push-to-talk mode
 agent: aider                        # aider (more agents planned)
 aider_args: []                      # Extra args passed to aider
 wake_word: hey dev                  # Wake word for continuous mode
+require_wake_word: false            # true = require wake word (continuous mode)
 noise_reduction: true               # Enable noise cancellation
 session_logging: true               # Save session transcripts
 audio_feedback: true                # Play beep sounds on state changes
 confirm_before_send: false          # Show transcription and wait for confirmation
 confirmation_timeout_s: 2.0         # Seconds to wait before auto-sending (if confirm enabled)
 show_confidence: true               # Display STT confidence scores
+min_audio_duration_s: 0.4           # Reject audio shorter than this (smart filter)
+min_confidence: 0.35                # Reject transcriptions below this confidence (smart filter)
+filler_words:                       # Words rejected by smart filter
+  - um
+  - uh
+  - hmm
+  - ah
+  - oh
+  - er
+  - like
+  - you know
+  - okay
+  - right
+  - well
+  - thank you
+  - thanks
