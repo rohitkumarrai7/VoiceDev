@@ -111,7 +111,7 @@ class AiderBackend(AgentBackend):
 
         model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
         if not model_in_extra and use_minimax:
-            base.extend(["--model", "minimax/minimax-m2.5"])
+            base.extend(["--model", "minimax/minimax-m2.7"])
 
         base.extend(self._extra_args)
         return base

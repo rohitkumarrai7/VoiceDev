@@ -10,13 +10,13 @@ class TestAiderCommand:
 
         assert "--openai-api-key" not in cmd
         assert "--openai-api-base" not in cmd
-        assert "minimax/minimax-m2.5" not in cmd
+        assert "minimax/minimax-m2.7" not in cmd
 
     def test_explicit_minimax_model_adds_api_settings(self, monkeypatch):
         monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
         monkeypatch.delenv("VOICEDEV_USE_MINIMAX", raising=False)
 
-        cmd = AiderBackend(extra_args=["--model", "minimax/minimax-m2.5"])._build_cmd("aider")
+        cmd = AiderBackend(extra_args=["--model", "minimax/minimax-m2.7"])._build_cmd("aider")
 
         assert "--openai-api-key" in cmd
         assert "test-key" in cmd
@@ -30,4 +30,4 @@ class TestAiderCommand:
         cmd = AiderBackend()._build_cmd("aider")
 
         assert "--openai-api-key" in cmd
-        assert "minimax/minimax-m2.5" in cmd
+        assert "minimax/minimax-m2.7" in cmd
