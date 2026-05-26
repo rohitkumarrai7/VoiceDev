@@ -19,6 +19,10 @@ build/
 .aider/
 .aider.*
 
+# Landing page (Vite)
+landing/node_modules/
+landing/dist/
+
 # Project-specific (not for submission)
 Vocoder_Master_Build_Prompt.pdf
 problem_statements.md
