@@ -116,11 +116,11 @@ Continuous mode presents a unique challenge: how to distinguish intentional comm
 
 **Two-tier approach:**
 
-**Tier 1 — openwakeword (on-device ML):** When the optional `openwakeword` package is installed, VoiceDev runs a neural wake word detector on raw audio frames *before* sending anything to STT. This means no API calls are wasted on background noise, and detection latency is under 100ms on CPU. The library uses ONNX runtime for inference and comes with pre-trained models. We map the configurable wake word to the closest available model.
+**Tier 1 — openwakeword detector module (on-device ML):** The codebase includes an optional `openwakeword` detector that can run on raw audio frames. I kept it as an optional module rather than the default gating path because the available pre-trained wake words do not map perfectly to a custom phrase like "hey dev".
 
-**Tier 2 — Substring fallback:** When openwakeword is not installed, the system falls back to checking the wake phrase in the STT transcription text after full transcription. This is simpler but burns an STT API call for every detected speech segment, even if it's not directed at VoiceDev.
+**Default runtime path — Substring check after STT:** In the current CLI flow, continuous mode uses VAD to capture a speech segment, transcribes it, then checks whether the configured wake phrase appears in the text. This preserves custom wake phrase behavior and keeps the implementation predictable for the demo, at the cost of spending an STT call on each detected speech segment.
 
-**Design decision:** openwakeword is an optional dependency (`pip install voicedev[wakeword]`) rather than a core requirement. This keeps the base install lightweight and avoids ONNX runtime conflicts. The system reports which tier is active at startup so the user knows what to expect.
+**Design decision:** openwakeword is an optional dependency (`pip install voicedev[wakeword]`) rather than a core requirement. This keeps the base install lightweight, avoids ONNX runtime conflicts, and leaves room for a future production version to gate STT calls before transcription once a reliable custom wake word model is available.
 
 ---
 
@@ -213,7 +213,7 @@ In v0.1, the Aider backend hardcoded a default model (`minimax/minimax-m2.5`). I
 
 **Keyboard noise triggering VAD.** Mechanical keyboards can produce sounds loud enough to trigger VAD. Noise reduction helps, but in continuous mode, a user who types while the mic is active may generate false recordings. PTT mode avoids this entirely.
 
-**Wake word vocabulary.** The openwakeword models have a fixed set of wake words (e.g., "hey Jarvis"). Mapping custom phrases like "hey dev" to the closest model is imperfect. True custom wake word training requires significant audio data collection. The substring fallback handles custom phrases reliably at the cost of STT API calls.
+**Wake word vocabulary.** The openwakeword models have a fixed set of wake words (e.g., "hey Jarvis"). Mapping custom phrases like "hey dev" to the closest model is imperfect. The current CLI therefore uses the transcription-text wake phrase check for predictable custom phrase behavior. True custom wake word training would require significant audio data collection.
 
 **Aider output parsing.** On Windows, VoiceDev does not capture Aider's stdout (it renders directly to the terminal for UX reasons). This means prompt detection on Windows relies on timing heuristics rather than actual output parsing. On Unix with pexpect, prompt detection works via regex matching on captured output.
 

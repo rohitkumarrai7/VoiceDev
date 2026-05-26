@@ -17,7 +17,7 @@ VoiceDev is a voice-first interface layer for terminal-based AI coding agents. Y
 - **Three Input Modes:** PTT (reliable hold-to-record), Hands-Free (zero-touch, smart filter), Continuous (wake word + VAD)
 - **Voice Activity Detection (VAD):** Automatic speech onset/offset detection via webrtcvad across all modes
 - **Smart Audio Filter:** Rejects short clips (<0.4s), low confidence (<35%), and filler words ("um", "uh", etc.) in hands-free/continuous modes
-- **Wake Word Detection:** On-device ML-based wake word via [openwakeword](https://github.com/dscripka/openWakeWord) (optional), with substring fallback
+- **Wake Word Detection:** Continuous mode requires a wake phrase in the transcribed text, with an optional openwakeword detector module available for extension
 - **30+ Voice Meta-Commands:** Control VoiceDev and Aider with natural speech — file management, mode switching, git operations, and more
 - **Three STT Backends:** Groq Whisper (fastest, free), OpenAI Whisper API (cloud), faster-whisper (local, offline)
 - **STT Confidence Scores:** Real-time display of transcription confidence from Whisper model log-probabilities
@@ -54,8 +54,8 @@ cd voicedev
 # Install core dependencies
 pip install -r requirements.txt
 
-# Optional: install wake word detection (adds ~50MB model download)
-pip install openwakeword>=0.6.0
+# Optional: install wake word detection support (adds ~50MB model download)
+pip install "openwakeword>=0.6.0"
 
 # Or install as editable package (adds `voicedev` to PATH)
 pip install -e .
@@ -280,10 +280,10 @@ Disable with `--no-feedback` or `audio_feedback: false` in config.
 
 In continuous mode, VoiceDev uses wake word detection to distinguish intentional commands from background speech:
 
-- **With openwakeword installed:** Real ML-based on-device detection runs on raw audio frames *before* STT. No API calls wasted on background noise.
-- **Without openwakeword:** Falls back to checking for the wake phrase in the STT transcription (substring match).
+- **Current runtime path:** VAD captures a speech segment, STT transcribes it, and VoiceDev checks whether the text contains the configured wake phrase.
+- **Optional detector module:** `openwakeword` support is implemented in `audio/wakeword.py` for raw-audio wake detection, but the default CLI flow keeps the text-based wake phrase path for predictable custom phrases like `"hey dev"`.
 
-Install wake word support: `pip install openwakeword>=0.6.0`
+Install optional wake word support: `pip install "openwakeword>=0.6.0"`
 
 ---
 
