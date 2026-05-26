@@ -73,7 +73,9 @@ except ImportError:
     print("  (python-dotenv not installed — using process env only)")
 
 try:
-    from voicedev.agent.aider import AiderBackend
+    from voicedev.agent.aider import AiderBackend, LLM_PROVIDERS
+    supported = ", ".join(p["name"] for p in LLM_PROVIDERS)
+    print(f"  Supported providers: {supported}")
     active = AiderBackend._list_active_providers()
     if active:
         names = [p["name"] for p in active]
@@ -85,6 +87,7 @@ try:
         print(f"  CONFLICT: {llm['error']}")
     elif llm:
         print(f"  Provider: {llm['provider']}")
+        print(f"  Wire:     {llm.get('wire', 'openai_compatible')}")
         print(f"  Model:    {llm['model']}")
         if llm.get("api_base"):
             print(f"  Base:     {llm['api_base']}")

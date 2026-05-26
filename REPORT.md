@@ -203,7 +203,7 @@ Aider subprocess crashes are detected by watchdog threads. Rather than failing s
 
 ### Default model strategy
 
-In v0.1, the Aider backend hardcoded a default model (`minimax/minimax-m2.5`). In v0.3.1+, VoiceDev uses a provider registry with no fixed priority: whichever single agent API key block is active in `.env` drives Aider (MiniMax, OpenRouter/Qwen, or OpenAI). Model env vars (`MINIMAX_MODEL`, `QWEN3_MODEL`, `AIDER_MODEL`) override code fallbacks. If multiple agent keys are present, `VOICEDEV_LLM_PROVIDER` must disambiguate — otherwise startup logs an error instead of silently picking OpenRouter over MiniMax. This matches evaluator workflows: paste one block from `.env.example` and run.
+In v0.1, the Aider backend hardcoded a default model (`minimax/minimax-m2.5`). In v0.3.1+, VoiceDev uses a provider registry with no fixed priority: whichever single agent API key block is active in `.env` drives Aider. Supported providers: MiniMax, OpenRouter/Qwen, OpenAI, Anthropic (Claude), Gemini, and DeepSeek — each wired with the correct Aider flags (`--openai-api-key`, `--anthropic-api-key`, or `--api-key provider=key`). Model env vars override code fallbacks. If multiple agent keys are present, `VOICEDEV_LLM_PROVIDER` must disambiguate — otherwise startup logs an error. Evaluators paste one block from `.env.example` and run.
 
 ---
 

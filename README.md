@@ -91,19 +91,30 @@ Copy `.env.example` and enable **one** provider block (comment out the others):
 | MiniMax | `MINIMAX_API_KEY` | `MINIMAX_MODEL` or `AIDER_MODEL` |
 | OpenRouter / Qwen | `OPENROUTER_API_KEY` or `QWEN3_API_KEY` | `QWEN3_MODEL` or `AIDER_MODEL` |
 | OpenAI | `OPENAI_API_KEY` | `AIDER_MODEL` |
+| Claude | `ANTHROPIC_API_KEY` | `CLAUDE_MODEL`, `ANTHROPIC_MODEL`, or `AIDER_MODEL` |
+| Gemini | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `GEMINI_MODEL` or `AIDER_MODEL` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` or `AIDER_MODEL` |
 
 If exactly one agent API key is set, that provider is used automatically (including MiniMax with no extra flag).
 
-If multiple agent keys are set, set `VOICEDEV_LLM_PROVIDER=minimax|openrouter|openai` or use legacy `VOICEDEV_USE_MINIMAX` / `VOICEDEV_USE_QWEN3`.
+If multiple agent keys are set, set `VOICEDEV_LLM_PROVIDER=minimax|openrouter|openai|anthropic|gemini|deepseek` or use legacy `VOICEDEV_USE_MINIMAX` / `VOICEDEV_USE_QWEN3`.
 
-Bare OpenRouter model IDs like `qwen/foo` are auto-prefixed to `openrouter/qwen/foo`.
+Bare model IDs are auto-prefixed where needed (`qwen/foo` → `openrouter/qwen/foo`, `gemini-2.0-flash` → `gemini/gemini-2.0-flash`).
 
 ```bash
-# MiniMax example (Vinay / evaluator)
+# MiniMax
 MINIMAX_API_KEY=your_key
 MINIMAX_MODEL=minimax/minimax-m2.7
 
-# Qwen / OpenRouter example
+# Claude
+ANTHROPIC_API_KEY=your_key
+CLAUDE_MODEL=anthropic/claude-sonnet-4-20250514
+
+# Gemini
+GEMINI_API_KEY=your_key
+GEMINI_MODEL=gemini/gemini-2.0-flash
+
+# Qwen / OpenRouter
 QWEN3_API_KEY=sk-or-v1_...
 QWEN3_MODEL=qwen/qwen3-next-80b-a3b-instruct:free
 ```

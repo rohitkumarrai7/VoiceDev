@@ -13,8 +13,14 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 OPENROUTER_DEFAULT_MODEL = "openrouter/qwen/qwen-2.5-coder-32b-instruct:free"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 MINIMAX_DEFAULT_MODEL = "minimax/minimax-m2.7"
+ANTHROPIC_DEFAULT_MODEL = "anthropic/claude-sonnet-4-20250514"
+GEMINI_DEFAULT_MODEL = "gemini/gemini-2.0-flash"
+DEEPSEEK_DEFAULT_MODEL = "deepseek/deepseek-chat"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 MINIMAX_API_BASE = "https://api.minimaxi.chat/v1"
+LLM_PROVIDER_NAMES = (
+    "minimax", "openrouter", "openai", "anthropic", "gemini", "deepseek",
+)
 
 # Each provider is selected when its API key env is set; no fixed priority.
 # If multiple keys are set, use VOICEDEV_LLM_PROVIDER or legacy VOICEDEV_USE_* flags.
@@ -26,6 +32,7 @@ LLM_PROVIDERS: List[Dict[str, Any]] = [
         "model_envs": ["AIDER_MODEL", "QWEN3_MODEL"],
         "fallback_model": OPENROUTER_DEFAULT_MODEL,
         "normalize": "openrouter",
+        "wire": "openai_compatible",
     },
     {
         "name": "openai",
@@ -34,6 +41,7 @@ LLM_PROVIDERS: List[Dict[str, Any]] = [
         "model_envs": ["AIDER_MODEL"],
         "fallback_model": OPENAI_DEFAULT_MODEL,
         "normalize": None,
+        "wire": "openai_compatible",
     },
     {
         "name": "minimax",
@@ -42,6 +50,36 @@ LLM_PROVIDERS: List[Dict[str, Any]] = [
         "model_envs": ["AIDER_MODEL", "MINIMAX_MODEL"],
         "fallback_model": MINIMAX_DEFAULT_MODEL,
         "normalize": None,
+        "wire": "openai_compatible",
+    },
+    {
+        "name": "anthropic",
+        "keys": ["ANTHROPIC_API_KEY"],
+        "base": None,
+        "model_envs": ["AIDER_MODEL", "CLAUDE_MODEL", "ANTHROPIC_MODEL"],
+        "fallback_model": ANTHROPIC_DEFAULT_MODEL,
+        "normalize": "anthropic",
+        "wire": "anthropic",
+    },
+    {
+        "name": "gemini",
+        "keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "base": None,
+        "model_envs": ["AIDER_MODEL", "GEMINI_MODEL"],
+        "fallback_model": GEMINI_DEFAULT_MODEL,
+        "normalize": "gemini",
+        "wire": "api_key_flag",
+        "api_key_flag_provider": "gemini",
+    },
+    {
+        "name": "deepseek",
+        "keys": ["DEEPSEEK_API_KEY"],
+        "base": None,
+        "model_envs": ["AIDER_MODEL", "DEEPSEEK_MODEL"],
+        "fallback_model": DEEPSEEK_DEFAULT_MODEL,
+        "normalize": "deepseek",
+        "wire": "api_key_flag",
+        "api_key_flag_provider": "deepseek",
     },
 ]
 
@@ -135,6 +173,24 @@ class AiderBackend(AgentBackend):
         return f"openrouter/{model}"
 
     @staticmethod
+    def _normalize_prefixed_model(model: str, prefix: str) -> str:
+        model = model.strip()
+        if not model:
+            return model
+        if model.startswith(f"{prefix}/"):
+            return model
+        return f"{prefix}/{model}"
+
+    @staticmethod
+    def _normalize_model_for_provider(provider: Dict[str, Any], model: str) -> str:
+        normalize = provider.get("normalize")
+        if normalize == "openrouter":
+            return AiderBackend._normalize_openrouter_model(model)
+        if normalize in ("anthropic", "gemini", "deepseek"):
+            return AiderBackend._normalize_prefixed_model(model, normalize)
+        return model
+
+    @staticmethod
     def _provider_has_key(provider: Dict[str, Any]) -> bool:
         for key_name in provider["keys"]:
             if os.environ.get(key_name, "").strip():
@@ -210,10 +266,11 @@ class AiderBackend(AgentBackend):
                 if os.environ.get(key_name, "").strip():
                     keys.append(key_name)
         key_list = ", ".join(sorted(set(keys)))
+        provider_list = "|".join(LLM_PROVIDER_NAMES)
         return (
             f"Multiple agent API keys set ({key_list}). "
             f"Active providers: {', '.join(names)}. "
-            "Set VOICEDEV_LLM_PROVIDER=minimax|openrouter|openai "
+            f"Set VOICEDEV_LLM_PROVIDER={provider_list} "
             "or comment out the keys you are not using."
         )
 
@@ -224,17 +281,50 @@ class AiderBackend(AgentBackend):
         api_base = override_base or provider["base"]
         model = AiderBackend._model_for_provider(provider)
 
-        if provider["normalize"] == "openrouter":
-            model = AiderBackend._normalize_openrouter_model(model)
+        model = AiderBackend._normalize_model_for_provider(provider, model)
 
         result: Dict[str, str] = {
             "provider": provider["name"],
             "api_key": api_key,
             "model": model,
+            "wire": provider.get("wire", "openai_compatible"),
         }
         if api_base:
             result["api_base"] = api_base
+        flag_provider = provider.get("api_key_flag_provider")
+        if flag_provider:
+            result["api_key_flag_provider"] = flag_provider
         return result
+
+    @staticmethod
+    def _apply_llm_flags(
+        base: List[str],
+        llm: Dict[str, str],
+        extra_args: List[str],
+    ) -> None:
+        has_openai_key = any(arg == "--openai-api-key" for arg in extra_args)
+        has_anthropic_key = any(arg == "--anthropic-api-key" for arg in extra_args)
+        has_base_in_extra = any(arg == "--openai-api-base" for arg in extra_args)
+        has_api_key_flag = any(arg == "--api-key" for arg in extra_args)
+        model_in_extra = any(arg.startswith("--model") for arg in extra_args)
+
+        wire = llm.get("wire", "openai_compatible")
+
+        if wire == "anthropic":
+            if not has_anthropic_key:
+                base.extend(["--anthropic-api-key", llm["api_key"]])
+        elif wire == "api_key_flag":
+            if not has_api_key_flag:
+                provider = llm.get("api_key_flag_provider", "gemini")
+                base.extend(["--api-key", f"{provider}={llm['api_key']}"])
+        else:
+            if not has_openai_key:
+                base.extend(["--openai-api-key", llm["api_key"]])
+            if llm.get("api_base") and not has_base_in_extra:
+                base.extend(["--openai-api-base", llm["api_base"]])
+
+        if not model_in_extra and llm.get("model"):
+            base.extend(["--model", llm["model"]])
 
     @staticmethod
     def _resolve_llm_from_env(extra_args: Optional[List[str]] = None) -> Optional[Dict[str, str]]:
@@ -275,21 +365,8 @@ class AiderBackend(AgentBackend):
         llm = self._resolve_llm_from_env(self._extra_args)
         self._resolved_llm = llm
 
-        has_api_key_in_extra = any(
-            arg == "--openai-api-key" for arg in self._extra_args
-        )
-        has_base_in_extra = any(
-            arg == "--openai-api-base" for arg in self._extra_args
-        )
-        model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
-
         if llm and "error" not in llm:
-            if not has_api_key_in_extra:
-                base.extend(["--openai-api-key", llm["api_key"]])
-            if llm.get("api_base") and not has_base_in_extra:
-                base.extend(["--openai-api-base", llm["api_base"]])
-            if not model_in_extra and llm.get("model"):
-                base.extend(["--model", llm["model"]])
+            AiderBackend._apply_llm_flags(base, llm, self._extra_args)
 
         base.extend(self._extra_args)
         return base
@@ -307,7 +384,7 @@ class AiderBackend(AgentBackend):
             print(
                 "\n[VoiceDev] WARNING: No agent LLM configured in .env.\n"
                 "[VoiceDev] Enable ONE provider block in .env.example "
-                "(MiniMax, OpenRouter/Qwen, or OpenAI).\n"
+                "(MiniMax, OpenRouter/Qwen, OpenAI, Claude, Gemini, or DeepSeek).\n"
                 "[VoiceDev] Without this, Aider may use a broken default model.\n"
             )
 
