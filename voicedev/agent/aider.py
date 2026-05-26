@@ -5,9 +5,16 @@ import subprocess
 import sys
 import threading
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from voicedev.agent.base import AgentBackend
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+OPENROUTER_DEFAULT_MODEL = "openrouter/qwen/qwen-2.5-coder-32b-instruct:free"
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+MINIMAX_DEFAULT_MODEL = "minimax/minimax-m2.7"
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+MINIMAX_API_BASE = "https://api.minimaxi.chat/v1"
 
 try:
     import pexpect
@@ -49,6 +56,7 @@ class AiderBackend(AgentBackend):
         self._restart_count = 0
         self._last_start_time = 0.0
         self._on_restart_cb = None
+        self._resolved_llm: Optional[Dict[str, str]] = None
 
     def set_on_restart(self, callback) -> None:
         self._on_restart_cb = callback
@@ -84,6 +92,65 @@ class AiderBackend(AgentBackend):
 
         return None
 
+    @staticmethod
+    def _env_truthy(name: str) -> bool:
+        return os.environ.get(name, "").lower().strip() in _TRUTHY
+
+    @staticmethod
+    def _resolve_llm_from_env(extra_args: Optional[List[str]] = None) -> Optional[Dict[str, str]]:
+        extra_args = extra_args or []
+        override_key = os.environ.get("AIDER_API_KEY", "").strip()
+        override_base = os.environ.get("AIDER_API_BASE", "").strip()
+        override_model = os.environ.get("AIDER_MODEL", "").strip()
+
+        openrouter_key = (
+            os.environ.get("OPENROUTER_API_KEY", "").strip()
+            or os.environ.get("QWEN3_API_KEY", "").strip()
+        )
+        openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
+
+        explicit_minimax_model = any("minimax" in arg.lower() for arg in extra_args)
+        minimax_opt_in = explicit_minimax_model or AiderBackend._env_truthy("VOICEDEV_USE_MINIMAX")
+
+        provider = None
+        api_key = ""
+        api_base: Optional[str] = None
+        default_model = ""
+
+        if openrouter_key:
+            provider = "openrouter"
+            api_key = override_key or openrouter_key
+            api_base = override_base or OPENROUTER_API_BASE
+            default_model = override_model or OPENROUTER_DEFAULT_MODEL
+        elif openai_key:
+            provider = "openai"
+            api_key = override_key or openai_key
+            api_base = override_base or None
+            default_model = override_model or OPENAI_DEFAULT_MODEL
+        elif minimax_key and minimax_opt_in:
+            provider = "minimax"
+            api_key = override_key or minimax_key
+            api_base = override_base or MINIMAX_API_BASE
+            default_model = override_model or MINIMAX_DEFAULT_MODEL
+        elif override_key:
+            provider = "openrouter"
+            api_key = override_key
+            api_base = override_base or OPENROUTER_API_BASE
+            default_model = override_model or OPENROUTER_DEFAULT_MODEL
+
+        if not provider or not api_key:
+            return None
+
+        result: Dict[str, str] = {
+            "provider": provider,
+            "api_key": api_key,
+            "model": default_model,
+        }
+        if api_base:
+            result["api_base"] = api_base
+        return result
+
     def _build_cmd(self, aider_path: str) -> List[str]:
         if aider_path == sys.executable:
             base = [sys.executable, "-m", "aider"]
@@ -98,26 +165,48 @@ class AiderBackend(AgentBackend):
             if flag not in self._extra_args:
                 base.append(flag)
 
-        minimax_key = os.environ.get("MINIMAX_API_KEY", "")
-        explicit_minimax_model = any("minimax" in arg.lower() for arg in self._extra_args)
-        minimax_env_enabled = os.environ.get("VOICEDEV_USE_MINIMAX", "").lower() in {
-            "1", "true", "yes", "on",
-        }
-        use_minimax = bool(minimax_key and (explicit_minimax_model or minimax_env_enabled))
+        llm = self._resolve_llm_from_env(self._extra_args)
+        self._resolved_llm = llm
 
-        if use_minimax:
-            base.extend(["--openai-api-key", minimax_key])
-            base.extend(["--openai-api-base", "https://api.minimaxi.chat/v1"])
-
+        has_api_key_in_extra = any(
+            arg == "--openai-api-key" for arg in self._extra_args
+        )
+        has_base_in_extra = any(
+            arg == "--openai-api-base" for arg in self._extra_args
+        )
         model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
-        if not model_in_extra and use_minimax:
-            base.extend(["--model", "minimax/minimax-m2.7"])
+
+        if llm:
+            if not has_api_key_in_extra:
+                base.extend(["--openai-api-key", llm["api_key"]])
+            if llm.get("api_base") and not has_base_in_extra:
+                base.extend(["--openai-api-base", llm["api_base"]])
+            if not model_in_extra and llm.get("model"):
+                base.extend(["--model", llm["model"]])
 
         base.extend(self._extra_args)
         return base
 
+    def _log_llm_config(self) -> None:
+        model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
+        if self._resolved_llm:
+            print(
+                f"[VoiceDev] Aider LLM: {self._resolved_llm['provider']} "
+                f"({self._resolved_llm['model']})"
+            )
+        elif not model_in_extra:
+            print(
+                "\n[VoiceDev] WARNING: No agent LLM configured in .env.\n"
+                "[VoiceDev] Set OPENROUTER_API_KEY (or OPENAI_API_KEY) and optional "
+                "AIDER_MODEL — see .env.example.\n"
+                "[VoiceDev] Without this, Aider may use a broken default model.\n"
+            )
+
     def start(self) -> None:
         self._last_start_time = time.time()
+        self._resolved_llm = self._resolve_llm_from_env(self._extra_args)
+        self._log_llm_config()
+
         aider_path = self._resolve_aider_path()
 
         if aider_path is None:

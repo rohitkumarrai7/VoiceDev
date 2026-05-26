@@ -82,7 +82,27 @@ If no key is set, VoiceDev automatically uses the **local faster-whisper** backe
 
 You can also use **OpenAI Whisper API** by setting `OPENAI_API_KEY` in `.env` instead.
 
-### 2. First Run
+### 2. Agent LLM (Aider — auto-detected from `.env`)
+
+VoiceDev passes API credentials to Aider based on which agent key you set (first match wins):
+
+| Priority | Env variable | Use case |
+|----------|--------------|----------|
+| 1 | `OPENROUTER_API_KEY` or `QWEN3_API_KEY` | OpenRouter models (recommended) |
+| 2 | `OPENAI_API_KEY` | Native OpenAI models |
+| 3 | `MINIMAX_API_KEY` + `VOICEDEV_USE_MINIMAX=true` | MiniMax (opt-in only) |
+
+```bash
+# In .env — example OpenRouter setup
+OPENROUTER_API_KEY=sk-or-v1_your_key_here
+AIDER_MODEL=openrouter/qwen/qwen-2.5-coder-32b-instruct:free
+```
+
+Optional overrides: `AIDER_API_KEY`, `AIDER_API_BASE`, `AIDER_MODEL`.
+
+On launch, VoiceDev prints which provider and model it selected. Without any agent key, Aider may fall back to a stale default model and fail with a 404 — see `.env.example`.
+
+### 3. First Run
 
 On first run, VoiceDev auto-creates `~/.voicedev/config.yaml` with sensible defaults.
 

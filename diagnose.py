@@ -60,6 +60,32 @@ except ImportError:
     print("  FAILED: pexpect not installed")
 print()
 
+print("Checking agent LLM resolution from environment:")
+try:
+    from pathlib import Path
+    from dotenv import load_dotenv
+    for p in [Path(".env"), Path(__file__).resolve().parent / ".env"]:
+        if p.exists():
+            load_dotenv(p, override=True)
+            print(f"  Loaded: {p}")
+            break
+except ImportError:
+    print("  (python-dotenv not installed — using process env only)")
+
+try:
+    from voicedev.agent.aider import AiderBackend
+    llm = AiderBackend._resolve_llm_from_env()
+    if llm:
+        print(f"  Provider: {llm['provider']}")
+        print(f"  Model:    {llm['model']}")
+        if llm.get("api_base"):
+            print(f"  Base:     {llm['api_base']}")
+    else:
+        print("  NONE — set OPENROUTER_API_KEY or OPENAI_API_KEY in .env (see .env.example)")
+except Exception as e:
+    print(f"  FAILED: {e}")
+print()
+
 print("=" * 60)
 aider_found = any(shutil.which(n) for n in ["aider","aider.exe","aider.bat","aider.cmd"])
 try:

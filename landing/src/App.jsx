@@ -38,7 +38,7 @@ const FLOW = [
 
 const SETUP_STEPS = [
   { cmd: "pip install -r requirements.txt", note: "Core dependencies" },
-  { cmd: "cp .env.example .env", note: "Add GROQ_API_KEY (optional)" },
+  { cmd: "cp .env.example .env", note: "GROQ_API_KEY (STT) + OPENROUTER_API_KEY (Aider)" },
   { cmd: "pip install aider-chat", note: "Target coding agent" },
   { cmd: "voicedev", note: "PTT default — hold Space" },
   { cmd: "voicedev --mode hands_free", note: "Zero-touch hands-free" },
