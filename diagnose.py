@@ -74,14 +74,22 @@ except ImportError:
 
 try:
     from voicedev.agent.aider import AiderBackend
+    active = AiderBackend._list_active_providers()
+    if active:
+        names = [p["name"] for p in active]
+        print(f"  Active provider key(s): {', '.join(names)}")
+        if len(active) > 1:
+            print("  WARNING: multiple agent keys — set VOICEDEV_LLM_PROVIDER")
     llm = AiderBackend._resolve_llm_from_env()
-    if llm:
+    if llm and "error" in llm:
+        print(f"  CONFLICT: {llm['error']}")
+    elif llm:
         print(f"  Provider: {llm['provider']}")
         print(f"  Model:    {llm['model']}")
         if llm.get("api_base"):
             print(f"  Base:     {llm['api_base']}")
     else:
-        print("  NONE — set OPENROUTER_API_KEY or OPENAI_API_KEY in .env (see .env.example)")
+        print("  NONE — enable ONE provider block in .env.example")
 except Exception as e:
     print(f"  FAILED: {e}")
 print()

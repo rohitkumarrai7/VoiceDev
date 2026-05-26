@@ -5,7 +5,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from voicedev.agent.base import AgentBackend
 
@@ -15,6 +15,35 @@ OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 MINIMAX_DEFAULT_MODEL = "minimax/minimax-m2.7"
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 MINIMAX_API_BASE = "https://api.minimaxi.chat/v1"
+
+# Each provider is selected when its API key env is set; no fixed priority.
+# If multiple keys are set, use VOICEDEV_LLM_PROVIDER or legacy VOICEDEV_USE_* flags.
+LLM_PROVIDERS: List[Dict[str, Any]] = [
+    {
+        "name": "openrouter",
+        "keys": ["OPENROUTER_API_KEY", "QWEN3_API_KEY"],
+        "base": OPENROUTER_API_BASE,
+        "model_envs": ["AIDER_MODEL", "QWEN3_MODEL"],
+        "fallback_model": OPENROUTER_DEFAULT_MODEL,
+        "normalize": "openrouter",
+    },
+    {
+        "name": "openai",
+        "keys": ["OPENAI_API_KEY"],
+        "base": None,
+        "model_envs": ["AIDER_MODEL"],
+        "fallback_model": OPENAI_DEFAULT_MODEL,
+        "normalize": None,
+    },
+    {
+        "name": "minimax",
+        "keys": ["MINIMAX_API_KEY"],
+        "base": MINIMAX_API_BASE,
+        "model_envs": ["AIDER_MODEL", "MINIMAX_MODEL"],
+        "fallback_model": MINIMAX_DEFAULT_MODEL,
+        "normalize": None,
+    },
+]
 
 try:
     import pexpect
@@ -97,59 +126,137 @@ class AiderBackend(AgentBackend):
         return os.environ.get(name, "").lower().strip() in _TRUTHY
 
     @staticmethod
-    def _resolve_llm_from_env(extra_args: Optional[List[str]] = None) -> Optional[Dict[str, str]]:
-        extra_args = extra_args or []
+    def _normalize_openrouter_model(model: str) -> str:
+        model = model.strip()
+        if not model:
+            return model
+        if model.startswith("openrouter/"):
+            return model
+        return f"openrouter/{model}"
+
+    @staticmethod
+    def _provider_has_key(provider: Dict[str, Any]) -> bool:
+        for key_name in provider["keys"]:
+            if os.environ.get(key_name, "").strip():
+                return True
+        return False
+
+    @staticmethod
+    def _provider_api_key(provider: Dict[str, Any]) -> str:
         override_key = os.environ.get("AIDER_API_KEY", "").strip()
-        override_base = os.environ.get("AIDER_API_BASE", "").strip()
-        override_model = os.environ.get("AIDER_MODEL", "").strip()
+        if override_key:
+            return override_key
+        for key_name in provider["keys"]:
+            value = os.environ.get(key_name, "").strip()
+            if value:
+                return value
+        return ""
 
-        openrouter_key = (
-            os.environ.get("OPENROUTER_API_KEY", "").strip()
-            or os.environ.get("QWEN3_API_KEY", "").strip()
+    @staticmethod
+    def _model_for_provider(provider: Dict[str, Any]) -> str:
+        for env_name in provider["model_envs"]:
+            value = os.environ.get(env_name, "").strip()
+            if value:
+                return value
+        return provider["fallback_model"]
+
+    @staticmethod
+    def _list_active_providers() -> List[Dict[str, Any]]:
+        return [p for p in LLM_PROVIDERS if AiderBackend._provider_has_key(p)]
+
+    @staticmethod
+    def _provider_by_name(name: str) -> Optional[Dict[str, Any]]:
+        name = name.lower().strip()
+        for provider in LLM_PROVIDERS:
+            if provider["name"] == name:
+                return provider
+        return None
+
+    @staticmethod
+    def _resolve_provider_conflict(
+        active: List[Dict[str, Any]], extra_args: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        extra_args = extra_args or []
+
+        explicit = os.environ.get("VOICEDEV_LLM_PROVIDER", "").strip().lower()
+        if explicit:
+            chosen = AiderBackend._provider_by_name(explicit)
+            if chosen and chosen in active:
+                return chosen
+
+        if AiderBackend._env_truthy("VOICEDEV_USE_MINIMAX"):
+            chosen = AiderBackend._provider_by_name("minimax")
+            if chosen and chosen in active:
+                return chosen
+
+        if AiderBackend._env_truthy("VOICEDEV_USE_QWEN3"):
+            chosen = AiderBackend._provider_by_name("openrouter")
+            if chosen and chosen in active:
+                return chosen
+
+        if any("minimax" in arg.lower() for arg in extra_args):
+            chosen = AiderBackend._provider_by_name("minimax")
+            if chosen and chosen in active:
+                return chosen
+
+        return None
+
+    @staticmethod
+    def _format_provider_conflict(active: List[Dict[str, Any]]) -> str:
+        names = [p["name"] for p in active]
+        keys = []
+        for provider in active:
+            for key_name in provider["keys"]:
+                if os.environ.get(key_name, "").strip():
+                    keys.append(key_name)
+        key_list = ", ".join(sorted(set(keys)))
+        return (
+            f"Multiple agent API keys set ({key_list}). "
+            f"Active providers: {', '.join(names)}. "
+            "Set VOICEDEV_LLM_PROVIDER=minimax|openrouter|openai "
+            "or comment out the keys you are not using."
         )
-        openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
 
-        explicit_minimax_model = any("minimax" in arg.lower() for arg in extra_args)
-        minimax_opt_in = explicit_minimax_model or AiderBackend._env_truthy("VOICEDEV_USE_MINIMAX")
+    @staticmethod
+    def _build_llm_config(provider: Dict[str, Any]) -> Dict[str, str]:
+        override_base = os.environ.get("AIDER_API_BASE", "").strip()
+        api_key = AiderBackend._provider_api_key(provider)
+        api_base = override_base or provider["base"]
+        model = AiderBackend._model_for_provider(provider)
 
-        provider = None
-        api_key = ""
-        api_base: Optional[str] = None
-        default_model = ""
-
-        if openrouter_key:
-            provider = "openrouter"
-            api_key = override_key or openrouter_key
-            api_base = override_base or OPENROUTER_API_BASE
-            default_model = override_model or OPENROUTER_DEFAULT_MODEL
-        elif openai_key:
-            provider = "openai"
-            api_key = override_key or openai_key
-            api_base = override_base or None
-            default_model = override_model or OPENAI_DEFAULT_MODEL
-        elif minimax_key and minimax_opt_in:
-            provider = "minimax"
-            api_key = override_key or minimax_key
-            api_base = override_base or MINIMAX_API_BASE
-            default_model = override_model or MINIMAX_DEFAULT_MODEL
-        elif override_key:
-            provider = "openrouter"
-            api_key = override_key
-            api_base = override_base or OPENROUTER_API_BASE
-            default_model = override_model or OPENROUTER_DEFAULT_MODEL
-
-        if not provider or not api_key:
-            return None
+        if provider["normalize"] == "openrouter":
+            model = AiderBackend._normalize_openrouter_model(model)
 
         result: Dict[str, str] = {
-            "provider": provider,
+            "provider": provider["name"],
             "api_key": api_key,
-            "model": default_model,
+            "model": model,
         }
         if api_base:
             result["api_base"] = api_base
         return result
+
+    @staticmethod
+    def _resolve_llm_from_env(extra_args: Optional[List[str]] = None) -> Optional[Dict[str, str]]:
+        extra_args = extra_args or []
+        active = AiderBackend._list_active_providers()
+
+        if len(active) == 0:
+            override_key = os.environ.get("AIDER_API_KEY", "").strip()
+            if override_key:
+                openrouter = AiderBackend._provider_by_name("openrouter")
+                if openrouter:
+                    return AiderBackend._build_llm_config(openrouter)
+            return None
+
+        if len(active) == 1:
+            return AiderBackend._build_llm_config(active[0])
+
+        chosen = AiderBackend._resolve_provider_conflict(active, extra_args)
+        if not chosen:
+            return {"error": AiderBackend._format_provider_conflict(active)}
+
+        return AiderBackend._build_llm_config(chosen)
 
     def _build_cmd(self, aider_path: str) -> List[str]:
         if aider_path == sys.executable:
@@ -176,7 +283,7 @@ class AiderBackend(AgentBackend):
         )
         model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
 
-        if llm:
+        if llm and "error" not in llm:
             if not has_api_key_in_extra:
                 base.extend(["--openai-api-key", llm["api_key"]])
             if llm.get("api_base") and not has_base_in_extra:
@@ -189,7 +296,9 @@ class AiderBackend(AgentBackend):
 
     def _log_llm_config(self) -> None:
         model_in_extra = any(arg.startswith("--model") for arg in self._extra_args)
-        if self._resolved_llm:
+        if self._resolved_llm and "error" in self._resolved_llm:
+            print(f"\n[VoiceDev] ERROR: {self._resolved_llm['error']}\n")
+        elif self._resolved_llm:
             print(
                 f"[VoiceDev] Aider LLM: {self._resolved_llm['provider']} "
                 f"({self._resolved_llm['model']})"
@@ -197,8 +306,8 @@ class AiderBackend(AgentBackend):
         elif not model_in_extra:
             print(
                 "\n[VoiceDev] WARNING: No agent LLM configured in .env.\n"
-                "[VoiceDev] Set OPENROUTER_API_KEY (or OPENAI_API_KEY) and optional "
-                "AIDER_MODEL — see .env.example.\n"
+                "[VoiceDev] Enable ONE provider block in .env.example "
+                "(MiniMax, OpenRouter/Qwen, or OpenAI).\n"
                 "[VoiceDev] Without this, Aider may use a broken default model.\n"
             )
 
